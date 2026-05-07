@@ -213,10 +213,10 @@ Must work from zero to running NPU inference in **< 5 minutes**.
 
 ### Active Context (Updated Each Session)
 
-> **Last updated**: 2026-05-04
-> **Version**: 0.3.0 | **Tests**: 1715 passing | **Source files**: 108 Python modules
-> **Last action**: Integrated QNN SDK API reference (11 components, 3 inference pipelines — .so/.bin/.tflite); updated README.md and created TODO.md
-> **Next action**: Share `qairt-converter` / `snpe-diagview` / `qnn-platform-validator` stdout formats to wire the real `QAIRTAdapter` — that is the single remaining blocker for real hardware mode
+> **Last updated**: 2026-05-07
+> **Version**: 0.3.0 | **Tests**: 1715+ passing | **Source files**: 108 Python modules
+> **Last action**: Real-hardware enablement scaffolding — hardened `AdapterFactory` (strict mode, tagged fallback mock, `real_mode_ready()`), added `quad mode` CLI command, added `quad doctor --real-mode` strict pre-flight, wrote `docs/REAL_HARDWARE.md` enablement playbook, added 14 new tests
+> **Next action**: Share `qairt-converter` / `snpe-diagview` / `qnn-platform-validator` stdout formats to wire the real `QAIRTAdapter` parsers — that is the single remaining blocker for full real hardware mode
 > **Blockers**: SDK CLI output format needed: (1) qairt-converter stdout on success/failure, (2) snpe-diagview text output schema, (3) qnn-platform-validator stdout
 > **Critical path**: All mock phases ✅ → **Real SDK wiring** (current) → Physical device testing → PyPI release
 > **Success metric**: `pip install qualcomm-ai-toolkit && quad quickstart` in < 5 minutes on real hardware

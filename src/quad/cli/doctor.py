@@ -39,7 +39,7 @@ class DoctorReport:
         return [c for c in self.checks if c.status == "fail"]
 
 
-def run_doctor() -> DoctorReport:
+def run_doctor(real_mode: bool = False) -> DoctorReport:
     """Run all environment diagnostic checks.
 
     Checks performed:
@@ -50,6 +50,15 @@ def run_doctor() -> DoctorReport:
         5. Device detection works
         6. Template directory exists
         7. Tests can import successfully
+        8. DLC / WER compatibility
+        9. SDK env vars, CLI tools, DSP env, Android tools
+       10. QHAS prerequisites
+       11. Adapter-mode consistency (real-mode pre-flight)
+
+    Args:
+        real_mode: If True, escalate SDK-related warnings to failures and
+            add an adapter-mode consistency check. Use this for a strict
+            pre-flight before running on physical hardware.
 
     Returns:
         DoctorReport with all check results.
@@ -72,7 +81,62 @@ def run_doctor() -> DoctorReport:
     report.checks.append(_check_android_tools())
     report.checks.append(_check_qhas_prerequisites())
 
+    if real_mode:
+        report.checks.append(_check_adapter_mode_real())
+        # Escalate any SDK-related warnings to failures
+        sdk_check_names = {
+            "SDK env vars",
+            "SDK tools in PATH",
+            "DSP env (ADSP_LIBRARY_PATH)",
+            "QHAS prerequisites",
+            "DLC compatibility",
+        }
+        for check in report.checks:
+            if check.name in sdk_check_names and check.status == "warn":
+                check.status = "fail"
+                check.message = f"[real-mode strict] {check.message}"
+
     return report
+
+
+def _check_adapter_mode_real() -> CheckResult:
+    """Confirm adapter_mode='real' is configured and the SDK is reachable.
+
+    Only included when ``run_doctor(real_mode=True)`` is called. Reports
+    PASS only if the factory would actually return a real adapter.
+    """
+    try:
+        from quad.adapters.factory import AdapterFactory
+        from quad.config import load_config
+    except Exception as e:
+        return CheckResult(
+            "Adapter mode (real)",
+            "fail",
+            f"Cannot load configuration to verify adapter mode: {e}",
+        )
+
+    try:
+        cfg = load_config()
+    except Exception as e:
+        return CheckResult(
+            "Adapter mode (real)",
+            "fail",
+            f"load_config() failed: {e}. Check quad.toml syntax.",
+        )
+
+    factory = AdapterFactory(cfg)
+    ready, reason = factory.real_mode_ready()
+
+    if ready:
+        return CheckResult("Adapter mode (real)", "pass", reason)
+    if cfg.adapter_mode != "real":
+        return CheckResult(
+            "Adapter mode (real)",
+            "fail",
+            f"adapter_mode is {cfg.adapter_mode!r}, not 'real'. "
+            "Set adapter_mode = \"real\" in quad.toml or export QUAD_ADAPTER_MODE=real.",
+        )
+    return CheckResult("Adapter mode (real)", "fail", reason)
 
 
 def _check_python_version() -> CheckResult:

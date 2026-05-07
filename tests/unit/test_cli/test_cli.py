@@ -148,3 +148,126 @@ class TestCLIMain:
         assert "quickstart" in result.output
         assert "doctor" in result.output
         assert "benchmark" in result.output
+        assert "mode" in result.output
+
+
+class TestDoctorRealMode:
+    """Tests for `quad doctor --real-mode` strict pre-flight."""
+
+    def _strip_sdk_env(self, monkeypatch):
+        for var in (
+            "QAIRT_SDK_ROOT",
+            "QNN_SDK_ROOT",
+            "SNPE_ROOT",
+            "QUAD_ADAPTER_MODE",
+            "QUAD_STRICT_REAL",
+            "ADSP_LIBRARY_PATH",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_real_mode_adds_adapter_check(self, monkeypatch) -> None:
+        from quad.cli.doctor import run_doctor
+
+        self._strip_sdk_env(monkeypatch)
+        report = run_doctor(real_mode=True)
+        names = [c.name for c in report.checks]
+        assert "Adapter mode (real)" in names
+
+    def test_real_mode_escalates_sdk_warnings(self, monkeypatch) -> None:
+        """SDK env-var warnings must escalate to fail under --real-mode."""
+        from quad.cli.doctor import run_doctor
+
+        self._strip_sdk_env(monkeypatch)
+        report = run_doctor(real_mode=True)
+        sdk_check = next(c for c in report.checks if c.name == "SDK env vars")
+        assert sdk_check.status == "fail"
+        assert "real-mode strict" in sdk_check.message
+
+    def test_non_real_mode_keeps_sdk_warnings_as_warn(self, monkeypatch) -> None:
+        from quad.cli.doctor import run_doctor
+
+        self._strip_sdk_env(monkeypatch)
+        report = run_doctor(real_mode=False)
+        sdk_check = next(c for c in report.checks if c.name == "SDK env vars")
+        assert sdk_check.status == "warn"
+
+    def test_doctor_default_is_lenient(self, monkeypatch) -> None:
+        """Default `quad doctor` (no --real-mode) shouldn't add the real check."""
+        from quad.cli.doctor import run_doctor
+
+        self._strip_sdk_env(monkeypatch)
+        report = run_doctor()
+        names = [c.name for c in report.checks]
+        assert "Adapter mode (real)" not in names
+
+    def test_doctor_cli_real_mode_exits_non_zero(self, monkeypatch) -> None:
+        """`quad doctor --real-mode` must exit non-zero when SDK is missing."""
+        from quad.cli.main import app
+        from typer.testing import CliRunner
+
+        self._strip_sdk_env(monkeypatch)
+        runner = CliRunner()
+        result = runner.invoke(app, ["doctor", "--real-mode"])
+        assert result.exit_code == 1
+        assert "Real-mode pre-flight failed" in result.output
+
+
+class TestModeCommand:
+    """Tests for the `quad mode` CLI command."""
+
+    def _strip_sdk_env(self, monkeypatch):
+        for var in (
+            "QAIRT_SDK_ROOT",
+            "QNN_SDK_ROOT",
+            "SNPE_ROOT",
+            "QUAD_ADAPTER_MODE",
+            "QUAD_STRICT_REAL",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_mode_reports_mock_by_default(self, monkeypatch, tmp_path) -> None:
+        from quad.cli.main import app
+        from typer.testing import CliRunner
+
+        self._strip_sdk_env(monkeypatch)
+        monkeypatch.chdir(tmp_path)  # no quad.toml present → defaults
+        runner = CliRunner()
+        result = runner.invoke(app, ["mode"])
+        assert result.exit_code == 0
+        assert "adapter_mode:" in result.output
+        assert "mock" in result.output
+        assert "NOT READY" in result.output
+
+    def test_mode_set_prints_export(self, monkeypatch) -> None:
+        from quad.cli.main import app
+        from typer.testing import CliRunner
+
+        self._strip_sdk_env(monkeypatch)
+        runner = CliRunner()
+        result = runner.invoke(app, ["mode", "--set", "real"])
+        assert result.exit_code == 0
+        assert "export QUAD_ADAPTER_MODE=real" in result.output
+
+    def test_mode_set_rejects_invalid(self, monkeypatch) -> None:
+        from quad.cli.main import app
+        from typer.testing import CliRunner
+
+        self._strip_sdk_env(monkeypatch)
+        runner = CliRunner()
+        result = runner.invoke(app, ["mode", "--set", "bogus"])
+        assert result.exit_code == 2
+
+    def test_mode_reports_ready_when_sdk_present(self, monkeypatch, tmp_path) -> None:
+        from quad.cli.main import app
+        from typer.testing import CliRunner
+
+        self._strip_sdk_env(monkeypatch)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("QAIRT_SDK_ROOT", str(tmp_path))
+        monkeypatch.setenv("QUAD_ADAPTER_MODE", "real")
+        runner = CliRunner()
+        result = runner.invoke(app, ["mode"])
+        assert result.exit_code == 0
+        assert "READY" in result.output
+        # Make sure we didn't accidentally print NOT READY (substring trap)
+        assert "NOT READY" not in result.output

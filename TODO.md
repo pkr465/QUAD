@@ -1,6 +1,10 @@
 # QUAD — Pending Tasks
 
-> Last updated: 2026-05-04 | Tests: 1715 passing | Version: 0.3.0
+> Last updated: 2026-05-07 | Tests: 1715+ passing | Version: 0.3.0
+>
+> Real-hardware mode entry point: see `docs/REAL_HARDWARE.md`. Use
+> `quad mode` to inspect the active adapter mode and `quad doctor --real-mode`
+> for a strict SDK pre-flight check.
 
 ---
 

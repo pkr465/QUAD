@@ -56,11 +56,24 @@ def quickstart() -> None:
 
 
 @app.command()
-def doctor() -> None:
-    """Diagnose environment and report issues."""
+def doctor(
+    real_mode: bool = typer.Option(
+        False,
+        "--real-mode",
+        help="Strict pre-flight for real-hardware mode. Exits non-zero if any "
+        "SDK/runtime check fails or warns. Use this in CI before running on hardware.",
+    ),
+) -> None:
+    """Diagnose environment and report issues.
+
+    Use ``--real-mode`` for a strict pre-flight check before running on
+    physical hardware: warnings about missing SDK env vars, missing CLI
+    tools, or missing DSP libraries are escalated to errors and the
+    process exits with status 1.
+    """
     from quad.cli.doctor import run_doctor
 
-    report = run_doctor()
+    report = run_doctor(real_mode=real_mode)
 
     for check in report.checks:
         icon = {"pass": "[PASS]", "warn": "[WARN]", "fail": "[FAIL]"}[check.status]
@@ -69,11 +82,59 @@ def doctor() -> None:
     typer.echo("")
     if report.all_passed:
         typer.echo("All checks passed.")
-    else:
-        if report.warnings:
-            typer.echo(f"Warnings: {len(report.warnings)}")
-        if report.errors:
-            typer.echo(f"Errors: {len(report.errors)}")
+        return
+
+    if report.warnings:
+        typer.echo(f"Warnings: {len(report.warnings)}")
+    if report.errors:
+        typer.echo(f"Errors: {len(report.errors)}")
+
+    if real_mode and (report.errors or report.warnings):
+        typer.echo("\nReal-mode pre-flight failed. Fix the issues above before running on hardware.")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def mode(
+    set_to: Optional[str] = typer.Option(
+        None,
+        "--set",
+        help="Set adapter mode for the current shell: 'mock' or 'real'. "
+        "Prints the export command — wrap in $(quad mode --set real) to apply.",
+    ),
+) -> None:
+    """Show the active adapter mode and whether real-hardware mode is ready.
+
+    Reads ``adapter_mode`` from quad.toml and ``QUAD_ADAPTER_MODE`` from
+    the environment, then reports whether real mode would actually work
+    (i.e. whether the SDK root + tools are reachable).
+    """
+    if set_to is not None:
+        if set_to not in {"mock", "real"}:
+            typer.echo(f"Invalid mode {set_to!r}. Must be 'mock' or 'real'.", err=True)
+            raise typer.Exit(code=2)
+        # Print as a shell-evalable export so users can do:
+        #   eval "$(quad mode --set real)"
+        typer.echo(f"export QUAD_ADAPTER_MODE={set_to}")
+        return
+
+    from quad.adapters.factory import AdapterFactory
+    from quad.config import load_config
+
+    cfg = load_config()
+    factory = AdapterFactory(cfg)
+
+    typer.echo(f"adapter_mode:    {factory.mode}")
+    typer.echo(f"strict:          {factory.strict}")
+    ready, reason = factory.real_mode_ready()
+    status = "READY" if ready else "NOT READY"
+    typer.echo(f"real-mode:       {status}")
+    typer.echo(f"  reason:        {reason}")
+    typer.echo("")
+    if not ready and factory.mode == "real":
+        typer.echo("Hint: run `quad doctor --real-mode` for a full pre-flight.")
+    elif factory.mode == "mock":
+        typer.echo("Hint: set QUAD_ADAPTER_MODE=real (or adapter_mode=\"real\" in quad.toml) to enable hardware.")
 
 
 @app.command()
