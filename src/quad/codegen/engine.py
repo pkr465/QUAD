@@ -63,7 +63,8 @@ class CodegenEngine:
             output_name = tmpl_file.stem  # e.g. inference.py from inference.py.j2
 
             try:
-                template = self._env.get_template(str(rel_path))
+                # Jinja2 always expects forward-slash paths regardless of OS
+                template = self._env.get_template(rel_path.as_posix())
                 rendered = template.render(**variables)
             except TemplateNotFound as e:
                 raise TemplateRenderError(str(rel_path), f"Template not found: {e}") from e

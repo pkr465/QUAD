@@ -1,0 +1,358 @@
+{
+  "host": {
+    "cpu_name": "Snapdragon(R) X Elite - X1E80100 - Qualcomm(R) Oryon(TM) CPU",
+    "cpu_cores": 12,
+    "cpu_threads": 12,
+    "cpu_max_mhz": 4012,
+    "gpu_name": "Qualcomm(R) Adreno(TM) X1-85 GPU",
+    "gpu_driver": "31.0.67.0",
+    "npu_name": "Snapdragon(R) X Elite - X1E80100 - Qualcomm(R) Hexagon(TM) NPU",
+    "npu_present": true,
+    "ram_gb": 31.6,
+    "os_name": "Microsoft Windows 11 Pro",
+    "os_arch": "X64",
+    "on_battery": false,
+    "battery_pct": 100
+  },
+  "quad_device": {
+    "chipset": "Snapdragon X Elite X1E-80-100",
+    "platform": "windows",
+    "cpu_cores": 12,
+    "cpu_arch": "Oryon ARM64",
+    "cpu_freq_ghz": 3.8,
+    "gpu_model": "Adreno X1-85",
+    "gpu_tflops": 4.6,
+    "npu_model": "Hexagon NPU",
+    "npu_tops": 45.0,
+    "ram_gb": 32.0,
+    "sdk_path": "C:/Qualcomm/AIStack/QNN",
+    "sdk_version": "2.28.0",
+    "available_runtimes": [
+      "cpu",
+      "gpu",
+      "npu"
+    ]
+  },
+  "conversion": {
+    "output_path": "C:\\work\\05\\QUAD\\.claude\\worktrees\\relaxed-jones-c5390e\\examples\\models\\mobilenetv2-12.dlc",
+    "model_size_mb": 3.33,
+    "original_size_mb": 13.32,
+    "compression_ratio": 4.0,
+    "supported_ops_pct": 96.5,
+    "unsupported_ops": [],
+    "quantization_applied": "int8",
+    "conversion_time_s": 1.33,
+    "target_sdk": "snpe",
+    "warnings": [],
+    "conversion_notes": [],
+    "image_format_notes": [
+      "Input layout is NCHW (PyTorch). SNPE requires NHWC \u2014 transpose before inference: np.transpose(img, (0, 2, 3, 1))  # (N,C,H,W) \u2192 (N,H,W,C)"
+    ]
+  },
+  "cpu_benchmark": {
+    "runtime": "ONNX Runtime CPUExecutionProvider (Oryon)",
+    "iterations": 500,
+    "warmup": 50,
+    "mean_ms": 2.5635092000011355,
+    "median_ms": 2.1993000009388197,
+    "p95_ms": 4.684814997199272,
+    "p99_ms": 6.281258999406416,
+    "min_ms": 2.03719999990426,
+    "max_ms": 9.687300000223331,
+    "stddev_ms": 0.9514648961214499,
+    "throughput_fps": 388.0473650615014,
+    "memory_peak_mb": 129.6,
+    "memory_baseline_mb": 125.8,
+    "cpu_pct_during_run": 1160.3,
+    "battery_pct_start": 100,
+    "battery_pct_end": 100,
+    "mmacs_per_inference": 300.0,
+    "elapsed_total_s": 1.289
+  },
+  "npu_projection": {
+    "latency": {
+      "mean_ms": 5.0,
+      "p50_ms": 4.75,
+      "p95_ms": 7.0,
+      "p99_ms": 9.0,
+      "min_ms": 4.0,
+      "max_ms": 11.0
+    },
+    "throughput_fps": 200.0,
+    "power_mw": 2000.0,
+    "memory_peak_mb": 45.0,
+    "memory_avg_mb": 38.0,
+    "utilization": {
+      "cpu": 15.0,
+      "gpu": 5.0,
+      "npu": 89.0
+    },
+    "layers": [
+      {
+        "name": "conv1",
+        "op_type": "conv",
+        "runtime": "npu",
+        "latency_ms": 0.5,
+        "memory_mb": 2.0
+      },
+      {
+        "name": "bn1",
+        "op_type": "bn",
+        "runtime": "npu",
+        "latency_ms": 0.5,
+        "memory_mb": 2.5
+      },
+      {
+        "name": "relu1",
+        "op_type": "relu",
+        "runtime": "npu",
+        "latency_ms": 0.5,
+        "memory_mb": 3.0
+      },
+      {
+        "name": "conv2",
+        "op_type": "conv",
+        "runtime": "npu",
+        "latency_ms": 0.5,
+        "memory_mb": 3.5
+      },
+      {
+        "name": "bn2",
+        "op_type": "bn",
+        "runtime": "npu",
+        "latency_ms": 0.5,
+        "memory_mb": 4.0
+      },
+      {
+        "name": "relu2",
+        "op_type": "relu",
+        "runtime": "npu",
+        "latency_ms": 0.5,
+        "memory_mb": 4.5
+      },
+      {
+        "name": "conv3",
+        "op_type": "conv",
+        "runtime": "npu",
+        "latency_ms": 0.5,
+        "memory_mb": 5.0
+      },
+      {
+        "name": "pool1",
+        "op_type": "pool",
+        "runtime": "npu",
+        "latency_ms": 0.5,
+        "memory_mb": 5.5
+      },
+      {
+        "name": "fc1",
+        "op_type": "fc",
+        "runtime": "npu",
+        "latency_ms": 0.5,
+        "memory_mb": 6.0
+      },
+      {
+        "name": "softmax",
+        "op_type": "softmax",
+        "runtime": "npu",
+        "latency_ms": 0.5,
+        "memory_mb": 6.5
+      }
+    ],
+    "device": {
+      "chipset": "Snapdragon X Elite X1E-80-100",
+      "platform": "windows",
+      "cpu_cores": 12,
+      "cpu_arch": "Oryon ARM64",
+      "cpu_freq_ghz": 3.8,
+      "gpu_model": "Adreno X1-85",
+      "gpu_tflops": 4.6,
+      "npu_model": "Hexagon NPU",
+      "npu_tops": 45.0,
+      "ram_gb": 32.0,
+      "sdk_path": "C:/Qualcomm/AIStack/QNN",
+      "sdk_version": "2.28.0",
+      "available_runtimes": [
+        "cpu",
+        "gpu",
+        "npu"
+      ]
+    },
+    "runtime_used": "npu",
+    "duration_s": 10.0,
+    "profiling_level": "detailed",
+    "linting_layers": [],
+    "linting_total_cycles": 0,
+    "linting_bottleneck_count": 0,
+    "linting_optimization_hints": [],
+    "qhas_chrometrace_path": null,
+    "qhas_htp_json_path": null
+  },
+  "linting": {
+    "total_cycles": 3753939,
+    "bottleneck_count": 1,
+    "top_ops": [
+      {
+        "name": "sub_op",
+        "index": 4,
+        "total_cycles": 2165162,
+        "wait_cycles": 0,
+        "overlap_cycles": 465046,
+        "overlap_wait_cycles": 0,
+        "overlap_ratio": 0.2148,
+        "cycle_fraction": 0.5768,
+        "resources": [
+          "HVX"
+        ],
+        "is_bottleneck": true,
+        "optimization_hint": "Consider replacing Sub op with Conv for better HTP utilization."
+      },
+      {
+        "name": "add_op",
+        "index": 5,
+        "total_cycles": 525971,
+        "wait_cycles": 0,
+        "overlap_cycles": 481468,
+        "overlap_wait_cycles": 0,
+        "overlap_ratio": 0.9154,
+        "cycle_fraction": 0.1401,
+        "resources": [
+          "HVX"
+        ],
+        "is_bottleneck": false,
+        "optimization_hint": null
+      },
+      {
+        "name": "output",
+        "index": 6,
+        "total_cycles": 407091,
+        "wait_cycles": 0,
+        "overlap_cycles": 115120,
+        "overlap_wait_cycles": 0,
+        "overlap_ratio": 0.2828,
+        "cycle_fraction": 0.1084,
+        "resources": [
+          "HVX"
+        ],
+        "is_bottleneck": false,
+        "optimization_hint": null
+      },
+      {
+        "name": "conv_left1",
+        "index": 2,
+        "total_cycles": 288249,
+        "wait_cycles": 425,
+        "overlap_cycles": 195988,
+        "overlap_wait_cycles": 304,
+        "overlap_ratio": 0.6799,
+        "cycle_fraction": 0.0768,
+        "resources": [
+          "HVX"
+        ],
+        "is_bottleneck": false,
+        "optimization_hint": null
+      },
+      {
+        "name": "conv_right1",
+        "index": 3,
+        "total_cycles": 220391,
+        "wait_cycles": 803,
+        "overlap_cycles": 135268,
+        "overlap_wait_cycles": 557,
+        "overlap_ratio": 0.6138,
+        "cycle_fraction": 0.0587,
+        "resources": [
+          "HVX"
+        ],
+        "is_bottleneck": false,
+        "optimization_hint": null
+      }
+    ]
+  },
+  "orchestration": {
+    "performance": {
+      "allocation": {
+        "conv1": "npu",
+        "bn1": "cpu",
+        "relu1": "npu",
+        "conv2": "npu",
+        "bn2": "cpu",
+        "relu2": "npu",
+        "conv3": "npu",
+        "pool1": "npu",
+        "fc1": "cpu",
+        "softmax": "npu"
+      },
+      "projected_latency_ms": 2.55,
+      "projected_power_mw": 1420.0,
+      "projected_memory_mb": 45.0,
+      "power_mode": "performance",
+      "fallback_layers": [
+        "bn1",
+        "bn2",
+        "fc1"
+      ],
+      "npu_utilization_pct": 70.0,
+      "gpu_utilization_pct": 0.0,
+      "cpu_utilization_pct": 30.0
+    },
+    "balanced": {
+      "allocation": {
+        "conv1": "npu",
+        "bn1": "cpu",
+        "relu1": "npu",
+        "conv2": "npu",
+        "bn2": "cpu",
+        "relu2": "npu",
+        "conv3": "npu",
+        "pool1": "npu",
+        "fc1": "cpu",
+        "softmax": "npu"
+      },
+      "projected_latency_ms": 2.55,
+      "projected_power_mw": 1420.0,
+      "projected_memory_mb": 45.0,
+      "power_mode": "balanced",
+      "fallback_layers": [
+        "bn1",
+        "bn2",
+        "fc1"
+      ],
+      "npu_utilization_pct": 70.0,
+      "gpu_utilization_pct": 0.0,
+      "cpu_utilization_pct": 30.0
+    },
+    "efficiency": {
+      "allocation": {
+        "conv1": "cpu",
+        "bn1": "cpu",
+        "relu1": "cpu",
+        "conv2": "cpu",
+        "bn2": "cpu",
+        "relu2": "cpu",
+        "conv3": "cpu",
+        "pool1": "cpu",
+        "fc1": "cpu",
+        "softmax": "cpu"
+      },
+      "projected_latency_ms": 5.0,
+      "projected_power_mw": 1000.0,
+      "projected_memory_mb": 45.0,
+      "power_mode": "efficiency",
+      "fallback_layers": [
+        "bn1",
+        "bn2",
+        "fc1"
+      ],
+      "npu_utilization_pct": 0.0,
+      "gpu_utilization_pct": 0.0,
+      "cpu_utilization_pct": 100.0
+    }
+  },
+  "generated_files": [
+    "C:\\work\\05\\QUAD\\.claude\\worktrees\\relaxed-jones-c5390e\\examples\\generated\\real_hw_demo\\CMakeLists.txt",
+    "C:\\work\\05\\QUAD\\.claude\\worktrees\\relaxed-jones-c5390e\\examples\\generated\\real_hw_demo\\inference.cpp"
+  ],
+  "model_path": "C:\\work\\05\\QUAD\\.claude\\worktrees\\relaxed-jones-c5390e\\examples\\models\\mobilenetv2-12.onnx",
+  "model_size_mb": 13.32
+}

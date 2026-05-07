@@ -1,10 +1,16 @@
 # QUAD — Pending Tasks
 
-> Last updated: 2026-05-07 | Tests: 1715+ passing | Version: 0.3.0
+> Last updated: 2026-05-07 | Tests: 1782 passing / 8 pre-existing Win32 path-assertion bugs | Version: 0.3.0
 >
 > Real-hardware mode entry point: see `docs/REAL_HARDWARE.md`. Use
 > `quad mode` to inspect the active adapter mode and `quad doctor --real-mode`
 > for a strict SDK pre-flight check.
+>
+> Live sample-app run on Dell Latitude 7455 (Snapdragon X Elite): see
+> `docs/SAMPLE_APP_REPORT.md` and `examples/sample_app_real_hw.py`.
+> Real CPU inference measured at 388 FPS / 2.56 ms mean / σ=0.95 ms on
+> Oryon (MobileNetV2-1.0, 500 iters via ONNX Runtime CPU EP).
+> NPU section pending QAIRT SDK install on the test laptop.
 
 ---
 
