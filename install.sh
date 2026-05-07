@@ -9,13 +9,26 @@
 #   scripts/adapters/setup_hexagon.sh — Hexagon SDK (custom DSP kernels)
 #
 # Usage:
-#   ./install.sh                 # Full: platform + all available adapters
-#   ./install.sh --mock-only     # Platform only (no SDK setup)
-#   ./install.sh --adapters qairt,qnn  # Specific adapters only
-#   ./install.sh --skip-tests    # Skip verification
-#   ./install.sh --help          # Show options
+#   ./install.sh                                  # Full: platform + adapters
+#   ./install.sh --qairt-archive ~/Downloads/qairt-2.45.0.zip  # One-step real setup
+#   ./install.sh --mock-only                      # Platform only (no SDK setup)
+#   ./install.sh --adapters qairt,qnn             # Specific adapters only
+#   ./install.sh --skip-tests                     # Skip verification
+#   ./install.sh --help                           # Show options
+#
+# Windows (no bash yet?)
+#   Run from PowerShell:           .\bootstrap.ps1
+#   Or from cmd.exe:               bootstrap.bat
+#   bootstrap.ps1 installs Git for Windows (which bundles Git Bash) via
+#   winget, then re-runs this script with the same arguments.
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
+
+# ── bash compatibility guard ────────────────────────────────────────────────
+if [[ -z "${BASH_VERSION:-}" ]]; then
+    echo "ERROR: install.sh requires bash. On Windows, run .\\bootstrap.ps1 first." >&2
+    exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/.venv"

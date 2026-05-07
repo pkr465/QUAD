@@ -34,6 +34,35 @@
 
 ## Quick Start — One Command
 
+### 0. Windows: install bash first (one-time)
+
+QUAD's installer scripts are bash. If you're on a fresh Windows machine
+without Git Bash or WSL, the bootstrap script does this for you:
+
+```powershell
+# From PowerShell — installs Git for Windows (bundles Git Bash) via winget,
+# then re-runs install.sh with the same flags.
+.\bootstrap.ps1                                          # mock-mode setup
+.\bootstrap.ps1 -QairtArchive C:\Downloads\qairt.zip     # real-mode setup
+.\bootstrap.ps1 -MockOnly                                # explicit mock
+```
+
+Or from `cmd.exe`:
+
+```cmd
+bootstrap.bat
+bootstrap.bat --qairt-archive "C:\Downloads\qairt.zip"
+```
+
+If `bootstrap.ps1` won't run because of an execution policy, use `bootstrap.bat`
+(it sets `-ExecutionPolicy Bypass` for you), or run:
+`powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1`.
+
+`bootstrap.ps1` is idempotent — safe to re-run; it skips the Git install if
+bash is already available. After it succeeds you have Git Bash + a fully
+configured QUAD install. **macOS / Linux / WSL users skip this step** and
+go straight to step 1.
+
 ### 1. Clone
 
 ```bash
@@ -49,6 +78,7 @@ git clone https://github.com/pkr465/QUAD.git && cd QUAD
 | `QAIRT_SDK_ROOT` already set, or SDK at vendor default path | `./install.sh` |
 | You have a CI mirror with a token | `QAIRT_DOWNLOAD_URL=… QAIRT_DOWNLOAD_TOKEN=… ./install.sh` |
 | No SDK available right now (still want to develop) | `./install.sh --mock-only` |
+| Windows without bash | `.\bootstrap.ps1` (see step 0 above) |
 
 The installer:
 - Creates `.venv/` and installs QUAD with dev extras

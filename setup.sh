@@ -13,11 +13,36 @@
 #   ./setup.sh --clean      # Remove existing .venv first
 #   ./setup.sh --help
 #
+# Windows (no bash yet?)
+#   This script needs bash. If you're on a fresh Windows machine without
+#   Git Bash / WSL, run from PowerShell:
+#       .\bootstrap.ps1
+#   …or from cmd.exe:
+#       bootstrap.bat
+#   bootstrap.ps1 installs Git for Windows (which bundles Git Bash) via
+#   winget, then re-runs install.sh with whatever flags you passed.
+#
 # After setup, activate the venv with:
 #   source .venv/bin/activate
 #   quad doctor
 # ═══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
+
+# ── Windows compatibility guard ──────────────────────────────────────────────
+# If we're somehow running under cmd.exe / PowerShell directly (no MSYS / WSL),
+# `BASH_VERSION` will be unset and `set -o pipefail` will already have failed.
+# But on legitimate-but-old bash (e.g. macOS 3.2), warn before going further.
+if [[ -z "${BASH_VERSION:-}" ]]; then
+    echo "ERROR: This script requires bash. You appear to be running under sh/dash/zsh."
+    echo "       On Windows, run bootstrap.ps1 (or bootstrap.bat) which auto-installs"
+    echo "       Git for Windows and re-runs this script."
+    exit 1
+fi
+if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+    echo "WARNING: bash ${BASH_VERSION} is old; QUAD's setup scripts need bash 4+."
+    echo "         On macOS, install via 'brew install bash'."
+    echo "         On Windows, run bootstrap.ps1 to install Git for Windows."
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/.venv"
