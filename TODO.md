@@ -1,10 +1,13 @@
 # QUAD — Pending Tasks
 
-> Last updated: 2026-05-07 | Tests: 1782 passing / 8 pre-existing Win32 path-assertion bugs | Version: 0.3.0
+> Last updated: 2026-05-07 | Tests: 1811 passing / 8 pre-existing Win32 path-assertion bugs | Version: 0.3.0
 >
-> Real-hardware mode entry point: see `docs/REAL_HARDWARE.md`. Use
-> `quad mode` to inspect the active adapter mode and `quad doctor --real-mode`
-> for a strict SDK pre-flight check.
+> **Quick start for real hardware:**
+>   1. `quad sdk install <path-to-qairt-archive>`  (download from
+>      <https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk>)
+>   2. `export QUAD_ADAPTER_MODE=real`
+>   3. `quad mode` to confirm READY, `quad doctor --real-mode` for a full pre-flight.
+>   See `docs/REAL_HARDWARE.md` for the complete playbook.
 >
 > Live sample-app run on Dell Latitude 7455 (Snapdragon X Elite): see
 > `docs/SAMPLE_APP_REPORT.md` and `examples/sample_app_real_hw.py`.

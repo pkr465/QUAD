@@ -43,26 +43,42 @@ one and exit non-zero.
 
 ## 3. The 5-step enablement playbook
 
+The recommended path uses `quad sdk install` which unpacks the SDK into
+the project's gitignored `./sdks/` directory and is then auto-detected
+by the MCP server on every subsequent start.
+
 ```bash
 # 1. Install QUAD (editable, with dev extras for tests)
 pip install -e .[dev]
 
-# 2. Point at the SDK and activate it
-export QAIRT_SDK_ROOT=/opt/qairt/2.45.0.260326
-source "$QAIRT_SDK_ROOT/bin/envsetup.sh"
+# 2. Download the SDK archive from the Qualcomm developer portal
+#    (requires a developer account + EULA acceptance — there is no
+#    public direct-download URL):
+#      https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
+#      https://www.qualcomm.com/developer/software/neural-processing-sdk-for-ai
+#    Save the .zip / .tar.gz somewhere on disk.
 
-# 3. Generate a config file
-cp configs/quad.toml.example quad.toml
-sed -i 's/adapter_mode = "mock"/adapter_mode = "real"/' quad.toml
+# 3. Unpack into ./sdks/ in one step
+quad sdk install ~/Downloads/qairt-2.45.0.260326.zip
 
-# 4. (Or set the env var instead of editing quad.toml)
+# 4. Flip to real mode (env var or quad.toml)
 export QUAD_ADAPTER_MODE=real
 export QUAD_STRICT_REAL=1   # fail fast if SDK becomes unreachable
 
 # 5. Confirm everything is wired
-quad mode
-quad doctor --real-mode
+quad sdk status            # shows the discovered SDK + its bin dir
+quad mode                  # should report `real-mode: READY`
+quad doctor --real-mode    # full pre-flight; exits non-zero on issues
 ```
+
+**Power users** who already have the SDK installed at a vendor default
+location (`C:\Qualcomm\AIStack\QAIRT\<ver>` on Windows or
+`/opt/qcom/aistack/qairt/<ver>` on Linux) or who set `QAIRT_SDK_ROOT`
+themselves can skip steps 2–3 — the discovery is a no-op when the env
+var is already populated.
+
+The MCP server runs the same discovery on every startup and writes the
+resolved SDK info to `.quad/sdk.json` for inspection.
 
 `quad mode` is the fastest way to see whether the next adapter call will
 hit real hardware:

@@ -54,6 +54,12 @@ Thumbs.db
 # QAIRT / SNPE SDK (large — not committed, install via setup script)
 qairt/
 
+# QUAD-managed SDK directory (populated by `quad sdk install`)
+sdks/
+
+# QUAD runtime state (resolved SDK info, etc.)
+.quad/
+
 # Word temp files
 ~$*
 

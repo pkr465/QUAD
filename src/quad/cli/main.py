@@ -120,12 +120,25 @@ def mode(
 
     from quad.adapters.factory import AdapterFactory
     from quad.config import load_config
+    from quad.sdk_manager import resolve_sdk_root, apply_to_environment
 
     cfg = load_config()
+
+    # Run SDK discovery so env vars are populated before checking readiness.
+    # This mirrors what the MCP server does at startup, so `quad mode`
+    # reports the same answer the server would see.
+    sdk = resolve_sdk_root()
+    if sdk is not None:
+        apply_to_environment(sdk)
+
     factory = AdapterFactory(cfg)
 
     typer.echo(f"adapter_mode:    {factory.mode}")
     typer.echo(f"strict:          {factory.strict}")
+    if sdk is not None:
+        typer.echo(f"sdk:             {sdk.flavor} {sdk.version}  ({sdk.source})")
+    else:
+        typer.echo(f"sdk:             (none — run `quad sdk status` for guidance)")
     ready, reason = factory.real_mode_ready()
     status = "READY" if ready else "NOT READY"
     typer.echo(f"real-mode:       {status}")
@@ -218,6 +231,123 @@ def version() -> None:
     import quad
 
     typer.echo(f"QUAD v{quad.__version__}")
+
+
+sdk_app = typer.Typer(
+    name="sdk",
+    help="Manage the Qualcomm AI Runtime SDK (QAIRT/SNPE) used by QUAD.",
+    no_args_is_help=True,
+)
+app.add_typer(sdk_app)
+
+
+@sdk_app.command("status")
+def sdk_status() -> None:
+    """Show the SDK QUAD will use (or report that none is installed)."""
+    from quad.sdk_manager import (
+        QAIRT_PRODUCT_URL,
+        SNPE_PRODUCT_URL,
+        discover_sdks,
+        missing_sdk_message,
+        resolve_sdk_root,
+    )
+
+    info = resolve_sdk_root()
+    if info is None:
+        typer.echo("No QAIRT/SNPE SDK detected.")
+        typer.echo("")
+        typer.echo(missing_sdk_message())
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Active SDK:")
+    typer.echo(f"  flavor:   {info.flavor}")
+    typer.echo(f"  version:  {info.version}")
+    typer.echo(f"  root:     {info.root}")
+    typer.echo(f"  bin:      {info.bin_dir or '(none — SDK has no bin/<arch>/ tools)'}")
+    typer.echo(f"  source:   {info.source}")
+    typer.echo(
+        f"  tools:    qairt-converter={'yes' if info.has_qairt_converter else 'no'}  "
+        f"snpe-net-run={'yes' if info.has_snpe_net_run else 'no'}"
+    )
+
+    others = discover_sdks()
+    if len(others) > 1:
+        typer.echo("")
+        typer.echo(f"Also found ({len(others) - 1} additional install{'s' if len(others) > 2 else ''}):")
+        for o in others[1:]:
+            typer.echo(f"  - {o.flavor} {o.version} @ {o.root} [{o.source}]")
+
+    typer.echo("")
+    typer.echo(f"Update sources:  QAIRT: {QAIRT_PRODUCT_URL}")
+    typer.echo(f"                 SNPE:  {SNPE_PRODUCT_URL}")
+
+
+@sdk_app.command("discover")
+def sdk_discover() -> None:
+    """Scan all known locations and list every SDK found."""
+    from quad.sdk_manager import DEFAULT_SCAN_PATHS, discover_sdks
+
+    sdks = discover_sdks()
+    if not sdks:
+        typer.echo("No QAIRT/SNPE SDKs found in any of:")
+        for p in DEFAULT_SCAN_PATHS:
+            typer.echo(f"  {p}")
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Found {len(sdks)} SDK install(s):")
+    for i, info in enumerate(sdks):
+        marker = "*" if i == 0 else " "
+        typer.echo(
+            f"  {marker} {info.flavor} {info.version}  ({info.source})  {info.root}"
+        )
+    typer.echo("")
+    typer.echo("(* = the one QUAD will use — first match wins)")
+
+
+@sdk_app.command("install")
+def sdk_install(
+    archive: str = typer.Argument(
+        ..., help="Path to a downloaded QAIRT/SNPE archive (.zip / .tar.gz / .tgz)"
+    ),
+    target: Optional[str] = typer.Option(
+        None, "--target", help="Override extraction directory (default: ./sdks/<archive-stem>)"
+    ),
+    overwrite: bool = typer.Option(
+        False, "--overwrite", help="Replace target directory if it already exists"
+    ),
+) -> None:
+    """Unpack a downloaded QAIRT/SNPE archive into ./sdks/.
+
+    Download the archive yourself (Qualcomm requires a developer-account
+    login + EULA acceptance — there is no public direct link), then run:
+
+        quad sdk install ~/Downloads/qairt-2.45.0.260326.zip
+
+    The unpacked SDK is gitignored and auto-detected on next server start.
+    """
+    from quad.sdk_manager import install_archive
+
+    try:
+        result = install_archive(archive, target_dir=target, overwrite=overwrite)
+    except FileNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=2)
+    except FileExistsError as e:
+        typer.echo(f"Error: {e}", err=True)
+        typer.echo("Pass --overwrite to replace the existing directory.", err=True)
+        raise typer.Exit(code=2)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=2)
+
+    typer.echo(f"Installed {result.flavor} {result.version} at:")
+    typer.echo(f"  {result.target_dir}")
+    typer.echo(
+        f"Extracted {result.files_extracted} files "
+        f"({result.bytes_extracted / 1024 / 1024:.1f} MB)"
+    )
+    typer.echo("")
+    typer.echo("Next: run `quad sdk status` to confirm, then `quad mode` to flip to real mode.")
 
 
 def main() -> None:

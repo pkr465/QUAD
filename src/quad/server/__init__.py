@@ -11,6 +11,7 @@ from fastmcp import FastMCP
 from quad.adapters.factory import AdapterFactory
 from quad.config import load_config
 from quad.logging import setup_logging
+from quad.sdk_manager import startup_resolve_and_log
 from quad.tools.convert_model import convert_model_impl
 from quad.tools.generate_code import generate_code_impl
 from quad.tools.hardware_detect import hardware_detect_impl
@@ -19,6 +20,12 @@ from quad.tools.profile_workload import profile_workload_impl
 
 # Load config and initialize
 _config = load_config()
+
+# SDK auto-discovery — runs before the AdapterFactory so the env vars
+# the factory inspects (QAIRT_SDK_ROOT etc.) are populated by whatever
+# we found in env / quad.toml / ./sdks / vendor defaults.
+_resolved_sdk = startup_resolve_and_log()
+
 _factory = AdapterFactory(_config)
 
 setup_logging(_config.log_level, _config.log_format)

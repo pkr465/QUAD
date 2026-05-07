@@ -214,9 +214,9 @@ Must work from zero to running NPU inference in **< 5 minutes**.
 ### Active Context (Updated Each Session)
 
 > **Last updated**: 2026-05-07
-> **Version**: 0.3.0 | **Tests**: 1782 passing / 8 pre-existing | **Source files**: 109 Python modules
-> **Last action**: Validated QUAD end-to-end on real Snapdragon X Elite hardware (Dell Latitude 7455). Built `examples/sample_app_real_hw.py` running real ONNX Runtime CPU inference (388 FPS / 2.56 ms / σ=0.95 on Oryon, 500 iters MobileNetV2-1.0) plus full QUAD MCP pipeline; published `docs/SAMPLE_APP_REPORT.md`; fixed Jinja2 template-path bug in codegen (28 pre-existing tests now pass).
-> **Next action**: Install QAIRT SDK on this machine (`QAIRT_SDK_ROOT=...` + `envsetup.ps1`) to flip section 4 of `SAMPLE_APP_REPORT.md` from projected NPU numbers to measured Hexagon HTP numbers
+> **Version**: 0.3.0 | **Tests**: 1811 passing / 8 pre-existing | **Source files**: 110 Python modules
+> **Last action**: Added `src/quad/sdk_manager.py` — server-startup SDK discovery (env vars → quad.toml → ./sdks → ~/.quad/sdks → vendor defaults), zip/tar archive installer with zip-slip + content-shape validation, `apply_to_environment()` so child processes inherit; new `quad sdk` CLI (status / discover / install); MCP server now runs `startup_resolve_and_log()` before AdapterFactory; 29 new tests.
+> **Next action**: User downloads QAIRT SDK from <https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk>, runs `quad sdk install ~/Downloads/qairt-X.Y.Z.zip`, server picks it up automatically, then we can land real `QAIRTAdapter` parsers (qairt-converter / snpe-diagview / qnn-platform-validator stdout)
 > **Blockers**: SDK CLI output format needed: (1) qairt-converter stdout on success/failure, (2) snpe-diagview text output schema, (3) qnn-platform-validator stdout
 > **Critical path**: All mock phases ✅ → **Real SDK wiring** (current) → Physical device testing → PyPI release
 > **Success metric**: `pip install qualcomm-ai-toolkit && quad quickstart` in < 5 minutes on real hardware
