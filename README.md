@@ -36,8 +36,8 @@
 
 ### 0. Windows: install bash first (one-time)
 
-QUAD's installer scripts are bash. If you're on a fresh Windows machine
-without Git Bash or WSL, the bootstrap script does this for you:
+QUAD's installer is `install.sh` — a bash script. If you're on a fresh Windows
+machine without Git Bash or WSL, the bootstrap handles this for you:
 
 ```powershell
 # From PowerShell — installs Git for Windows (bundles Git Bash) via winget,
@@ -45,6 +45,7 @@ without Git Bash or WSL, the bootstrap script does this for you:
 .\bootstrap.ps1                                          # mock-mode setup
 .\bootstrap.ps1 -QairtArchive C:\Downloads\qairt.zip     # real-mode setup
 .\bootstrap.ps1 -MockOnly                                # explicit mock
+.\bootstrap.ps1 -Clean                                   # nuke .venv first
 ```
 
 Or from `cmd.exe`:
@@ -52,11 +53,16 @@ Or from `cmd.exe`:
 ```cmd
 bootstrap.bat
 bootstrap.bat --qairt-archive "C:\Downloads\qairt.zip"
+bootstrap.bat --mock-only
+bootstrap.bat --clean
 ```
 
 If `bootstrap.ps1` won't run because of an execution policy, use `bootstrap.bat`
-(it sets `-ExecutionPolicy Bypass` for you), or run:
-`powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1`.
+(it sets `-ExecutionPolicy Bypass` for you). `bootstrap.bat` automatically
+prefers `pwsh.exe` (PowerShell 7+) over the legacy `powershell.exe` 5.1
+when both are available — `pwsh.exe` has better encoding handling and
+faster startup. Install PowerShell 7 via `winget install Microsoft.PowerShell`
+if you don't have it.
 
 `bootstrap.ps1` is idempotent — safe to re-run; it skips the Git install if
 bash is already available. After it succeeds you have Git Bash + a fully

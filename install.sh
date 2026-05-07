@@ -41,6 +41,8 @@ source "${SCRIPT_DIR}/scripts/helpers.sh"
 # ── Parse arguments ──
 MOCK_ONLY=false
 SKIP_TESTS=false
+CLEAN_VENV=false
+INSTALL_REAL_EXTRAS=false
 ADAPTERS_LIST="qairt,qnn,hexagon,target,udo"  # Default: all
 QAIRT_ARCHIVE=""
 
@@ -48,6 +50,8 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --mock-only)      MOCK_ONLY=true; shift ;;
         --skip-tests)     SKIP_TESTS=true; shift ;;
+        --clean)          CLEAN_VENV=true; shift ;;
+        --real)           INSTALL_REAL_EXTRAS=true; shift ;;
         --adapters)       ADAPTERS_LIST="$2"; shift 2 ;;
         --qairt-archive)  QAIRT_ARCHIVE="$2"; shift 2 ;;
         --help|-h)
@@ -61,6 +65,9 @@ while [[ $# -gt 0 ]]; do
             echo "                         (.zip / .tar.gz / .tgz) — recommended for first-time"
             echo "                         setup with the developer-portal download."
             echo "  --mock-only            Skip SDK setup; install QUAD in mock mode only."
+            echo "  --real                 Also install real-hardware Python extras"
+            echo "                         (asyncssh, paramiko, onnx — for remote-target deploys)"
+            echo "  --clean                Remove existing .venv/ before creating (full reinstall)"
             echo "  --adapters LIST        Comma-separated adapter list"
             echo "                         (default: qairt,qnn,hexagon,target,udo)"
             echo "  --skip-tests           Skip the post-install test verification"
@@ -133,6 +140,11 @@ log_ok "Python $PY_VERSION"
 # ═══════════════════════════════════════════════════════════════════════════
 log_section "Step 2: QUAD Platform"
 
+if [ "$CLEAN_VENV" = true ] && [ -d "$VENV_DIR" ]; then
+    log_info "Removing existing .venv/ (--clean)"
+    rm -rf "$VENV_DIR"
+fi
+
 if [ -d "$VENV_DIR" ]; then
     log_ok "Virtual environment exists (.venv/)"
 else
@@ -141,10 +153,28 @@ else
     log_ok "Created .venv/"
 fi
 
-source "$VENV_DIR/bin/activate"
+# Activate (handle both POSIX and Windows-Python venv layouts)
+if [ -f "$VENV_DIR/bin/activate" ]; then
+    # shellcheck source=/dev/null
+    source "$VENV_DIR/bin/activate"
+elif [ -f "$VENV_DIR/Scripts/activate" ]; then
+    # shellcheck source=/dev/null
+    source "$VENV_DIR/Scripts/activate"
+else
+    log_error "Could not find venv activate script in $VENV_DIR"
+    exit 1
+fi
+
 pip install --upgrade pip --quiet 2>/dev/null
 pip install -e ".[dev]" --quiet 2>/dev/null
 log_ok "quad-agent + dev dependencies installed"
+
+if [ "$INSTALL_REAL_EXTRAS" = true ]; then
+    log_info "Installing real-hardware Python extras (asyncssh, paramiko, onnx)..."
+    pip install -e ".[real]" --quiet 2>/dev/null && \
+        log_ok "Real-hardware extras installed" || \
+        log_warn "Some real-hardware extras failed (check pip output with --verbose)"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # STEP 3: Configuration

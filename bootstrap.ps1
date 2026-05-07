@@ -24,6 +24,8 @@ param(
     [string]$QairtArchive = "",
     [switch]$MockOnly,
     [switch]$SkipTests,
+    [switch]$Real,
+    [switch]$Clean,
     [switch]$NoInstallBash,
     [switch]$Force,
     [string]$Adapters = ""
@@ -31,6 +33,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ScriptDir = $PSScriptRoot
+
+# Soft nudge toward PowerShell 7+ when running on classic 5.1
+# (PSVersionTable.PSEdition is 'Desktop' on 5.x, 'Core' on 7+)
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    Write-Host ""
+    Write-Host "  [NOTE] Running on Windows PowerShell $($PSVersionTable.PSVersion). PowerShell 7+ is" -ForegroundColor DarkYellow
+    Write-Host "         recommended for better encoding + faster startup. Install via:" -ForegroundColor DarkYellow
+    Write-Host "             winget install Microsoft.PowerShell" -ForegroundColor DarkYellow
+    Write-Host "         (this script still works on 5.1)" -ForegroundColor DarkYellow
+}
 
 function Write-Header {
     param([string]$Text)
@@ -168,6 +180,8 @@ Write-Step "Step 3: Run install.sh"
 $installArgs = @()
 if ($MockOnly)   { $installArgs += "--mock-only" }
 if ($SkipTests)  { $installArgs += "--skip-tests" }
+if ($Real)       { $installArgs += "--real" }
+if ($Clean)      { $installArgs += "--clean" }
 if ($Adapters)   { $installArgs += @("--adapters", $Adapters) }
 if ($QairtArchive) {
     if (-not (Test-Path $QairtArchive)) {
