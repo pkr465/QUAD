@@ -215,8 +215,8 @@ Must work from zero to running NPU inference in **< 5 minutes**.
 
 > **Last updated**: 2026-05-07
 > **Version**: 0.3.0 | **Tests**: 1811 passing / 8 pre-existing | **Source files**: 110 Python modules
-> **Last action**: Added `src/quad/sdk_manager.py` — server-startup SDK discovery (env vars → quad.toml → ./sdks → ~/.quad/sdks → vendor defaults), zip/tar archive installer with zip-slip + content-shape validation, `apply_to_environment()` so child processes inherit; new `quad sdk` CLI (status / discover / install); MCP server now runs `startup_resolve_and_log()` before AdapterFactory; 29 new tests.
-> **Next action**: User downloads QAIRT SDK from <https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk>, runs `quad sdk install ~/Downloads/qairt-X.Y.Z.zip`, server picks it up automatically, then we can land real `QAIRTAdapter` parsers (qairt-converter / snpe-diagview / qnn-platform-validator stdout)
+> **Last action**: Made `./install.sh` a true one-step installer — added `--qairt-archive PATH` flag and `scripts/setup_sdk.sh` that tries every legitimate SDK-acquisition strategy in priority order (archive flag → existing env var → discovery → ~/Downloads auto-detect → URL+token for CI mirrors → graceful mock-mode fallback with clear guidance). `activate.sh` now re-resolves the SDK on every shell activation via `sdk_manager`, so updates are picked up without re-running the installer.
+> **Next action**: User downloads QAIRT SDK from <https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk>, runs `./install.sh --qairt-archive ~/Downloads/qairt-X.Y.Z.zip`, then we can land real `QAIRTAdapter` parsers (qairt-converter / snpe-diagview / qnn-platform-validator stdout)
 > **Blockers**: SDK CLI output format needed: (1) qairt-converter stdout on success/failure, (2) snpe-diagview text output schema, (3) qnn-platform-validator stdout
 > **Critical path**: All mock phases ✅ → **Real SDK wiring** (current) → Physical device testing → PyPI release
 > **Success metric**: `pip install qualcomm-ai-toolkit && quad quickstart` in < 5 minutes on real hardware

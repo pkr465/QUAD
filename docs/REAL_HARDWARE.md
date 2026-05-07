@@ -41,32 +41,52 @@ one and exit non-zero.
 
 ---
 
-## 3. The 5-step enablement playbook
+## 3. The 1-step enablement playbook
 
-The recommended path uses `quad sdk install` which unpacks the SDK into
-the project's gitignored `./sdks/` directory and is then auto-detected
-by the MCP server on every subsequent start.
+The recommended path is **`./install.sh --qairt-archive <path>`** which
+bundles every step into a single command:
 
 ```bash
-# 1. Install QUAD (editable, with dev extras for tests)
-pip install -e .[dev]
-
-# 2. Download the SDK archive from the Qualcomm developer portal
+# 1. Download the SDK archive from the Qualcomm developer portal
 #    (requires a developer account + EULA acceptance — there is no
 #    public direct-download URL):
 #      https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
 #      https://www.qualcomm.com/developer/software/neural-processing-sdk-for-ai
-#    Save the .zip / .tar.gz somewhere on disk.
 
-# 3. Unpack into ./sdks/ in one step
+# 2. Run the installer — does everything else
+./install.sh --qairt-archive ~/Downloads/qairt-2.45.0.260326.zip
+```
+
+That single command:
+
+* Creates `.venv/` and installs QUAD (`pip install -e .[dev]`)
+* Unpacks the archive into `./sdks/qairt-<version>/` (gitignored)
+* Sets `QAIRT_SDK_ROOT` / `QNN_SDK_ROOT` / `SNPE_ROOT` for the current shell
+* Generates `quad.toml` and `.claude/settings.json`
+* Generates `activate.sh` so future shells re-resolve the SDK automatically
+* Runs `pytest -q` and prints the result
+* Reports the path to use, e.g.:
+
+  ```
+  Platform:  quad-agent installed
+  QAIRT SDK: qairt 2.45.0.260326 (real mode available)
+             root: ./sdks/qairt-2.45.0.260326
+  Tests:     1811 passed, 8 failed in 9.92s
+  ```
+
+If you didn't pass `--qairt-archive`, the installer tries every other
+strategy automatically (existing `QAIRT_SDK_ROOT`, vendor-default
+locations, `~/Downloads/qairt*.zip`, `QAIRT_DOWNLOAD_URL` +
+`QAIRT_DOWNLOAD_TOKEN` for CI). If nothing's found, QUAD installs in
+mock mode and prints clear next-step instructions including the URLs.
+
+### Adding the SDK after the fact
+
+If you ran `./install.sh --mock-only` first or only got the SDK later:
+
+```bash
 quad sdk install ~/Downloads/qairt-2.45.0.260326.zip
-
-# 4. Flip to real mode (env var or quad.toml)
 export QUAD_ADAPTER_MODE=real
-export QUAD_STRICT_REAL=1   # fail fast if SDK becomes unreachable
-
-# 5. Confirm everything is wired
-quad sdk status            # shows the discovered SDK + its bin dir
 quad mode                  # should report `real-mode: READY`
 quad doctor --real-mode    # full pre-flight; exits non-zero on issues
 ```

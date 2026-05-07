@@ -29,42 +29,55 @@ source "${SCRIPT_DIR}/scripts/helpers.sh"
 MOCK_ONLY=false
 SKIP_TESTS=false
 ADAPTERS_LIST="qairt,qnn,hexagon,target,udo"  # Default: all
+QAIRT_ARCHIVE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --mock-only)    MOCK_ONLY=true; shift ;;
-        --skip-tests)   SKIP_TESTS=true; shift ;;
-        --adapters)     ADAPTERS_LIST="$2"; shift 2 ;;
+        --mock-only)      MOCK_ONLY=true; shift ;;
+        --skip-tests)     SKIP_TESTS=true; shift ;;
+        --adapters)       ADAPTERS_LIST="$2"; shift 2 ;;
+        --qairt-archive)  QAIRT_ARCHIVE="$2"; shift 2 ;;
         --help|-h)
             echo ""
-            echo -e "${BOLD}QUAD — Global Installation Script${NC}"
+            echo -e "${BOLD}QUAD — One-Step Installer${NC}"
             echo ""
             echo "Usage: ./install.sh [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --mock-only          Platform only (no SDK adapters)"
-            echo "  --adapters LIST      Comma-separated adapter list (default: qairt,qnn,hexagon)"
-            echo "  --skip-tests         Skip test verification"
-            echo "  --help               Show this help"
+            echo "  --qairt-archive PATH   Install the SDK from a downloaded archive"
+            echo "                         (.zip / .tar.gz / .tgz) — recommended for first-time"
+            echo "                         setup with the developer-portal download."
+            echo "  --mock-only            Skip SDK setup; install QUAD in mock mode only."
+            echo "  --adapters LIST        Comma-separated adapter list"
+            echo "                         (default: qairt,qnn,hexagon,target,udo)"
+            echo "  --skip-tests           Skip the post-install test verification"
+            echo "  --help                 Show this help"
             echo ""
-            echo "Available adapters:"
-            echo "  qairt     QAIRT/SNPE SDK — model conversion, inference, profiling"
-            echo "  qnn       QNN-specific — context binary, QNN backends"
-            echo "  hexagon   Hexagon SDK — custom DSP kernel development"
+            echo "Quickest paths to a working real-hardware setup:"
             echo ""
-            echo "Architecture:"
-            echo "  install.sh (orchestrator)"
-            echo "    ├── scripts/helpers.sh              (shared logging functions)"
-            echo "    └── scripts/adapters/"
-            echo "        ├── setup_qairt.sh             (QAIRT/SNPE)"
-            echo "        ├── setup_qnn.sh               (QNN)"
-            echo "        └── setup_hexagon.sh           (Hexagon DSP)"
+            echo "  1) After downloading the SDK from the Qualcomm developer portal:"
+            echo "       ./install.sh --qairt-archive ~/Downloads/qairt-2.45.0.260326.zip"
             echo ""
-            echo "Examples:"
-            echo "  ./install.sh                          # Full install"
-            echo "  ./install.sh --mock-only              # No SDK (mock mode)"
-            echo "  ./install.sh --adapters qairt         # Only QAIRT adapter"
-            echo "  ./install.sh --adapters qairt,hexagon # QAIRT + Hexagon"
+            echo "  2) If you already dropped the archive in ~/Downloads/, just:"
+            echo "       ./install.sh"
+            echo ""
+            echo "  3) For CI / org-managed mirrors with a pre-stored token:"
+            echo "       export QAIRT_DOWNLOAD_URL=https://your-mirror/qairt.zip"
+            echo "       export QAIRT_DOWNLOAD_TOKEN=<bearer-token>"
+            echo "       ./install.sh"
+            echo ""
+            echo "  4) No SDK available right now (still want a working dev env):"
+            echo "       ./install.sh --mock-only"
+            echo ""
+            echo "The installer always succeeds — if no SDK is found, QUAD falls back"
+            echo "to mock mode and prints clear next-step instructions including the"
+            echo "download URLs:"
+            echo ""
+            echo "  https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk"
+            echo "  https://www.qualcomm.com/developer/software/neural-processing-sdk-for-ai"
+            echo ""
+            echo -e "After install, ${BOLD}quad sdk install <archive>${NC} can be used to add or"
+            echo "update the SDK at any time."
             echo ""
             exit 0
             ;;
@@ -327,41 +340,54 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STEP 5: SDK Adapters (Modular)
+# STEP 5: SDK Setup (one-step, multi-strategy)
 # ═══════════════════════════════════════════════════════════════════════════
+SDK_INSTALLED=false
+RESOLVED_SDK_ROOT=""
+RESOLVED_SDK_VERSION=""
+RESOLVED_SDK_FLAVOR=""
+
 if [ "$MOCK_ONLY" = true ]; then
-    log_section "Step 5: SDK Adapters (Skipped — mock-only)"
+    log_section "Step 5: SDK Setup (Skipped — mock-only)"
     log_info "All tools will use simulated responses."
 else
-    log_section "Step 5: SDK Adapters"
+    # source setup_sdk.sh so it can export RESOLVED_SDK_ROOT into our scope
+    chmod +x "${SCRIPT_DIR}/scripts/setup_sdk.sh"
+    # shellcheck source=scripts/setup_sdk.sh
+    source "${SCRIPT_DIR}/scripts/setup_sdk.sh"
 
-    IFS=',' read -ra ADAPTERS <<< "$ADAPTERS_LIST"
-    ADAPTERS_INSTALLED=0
+    if setup_sdk --qairt-archive "${QAIRT_ARCHIVE}"; then
+        SDK_INSTALLED=true
+        # RESOLVED_SDK_ROOT/VERSION/FLAVOR populated by setup_sdk
+    fi
 
-    for adapter in "${ADAPTERS[@]}"; do
-        adapter=$(echo "$adapter" | tr -d ' ')  # Trim whitespace
-        setup_script="${ADAPTERS_DIR}/setup_${adapter}.sh"
-
-        if [ -f "$setup_script" ]; then
-            chmod +x "$setup_script"
-            source "$setup_script"
-
-            # Call the setup function
-            setup_func="setup_${adapter}"
-            if declare -f "$setup_func" > /dev/null 2>&1; then
-                if $setup_func; then
-                    ADAPTERS_INSTALLED=$((ADAPTERS_INSTALLED + 1))
-                fi
-            else
-                log_warn "Setup function '${setup_func}' not found in ${setup_script}"
+    # Optional: run additional adapters (qnn-specific, hexagon, target, udo)
+    # only after the core QAIRT setup succeeded
+    if [ "$SDK_INSTALLED" = true ]; then
+        IFS=',' read -ra ADAPTERS <<< "$ADAPTERS_LIST"
+        ADAPTERS_INSTALLED=0
+        for adapter in "${ADAPTERS[@]}"; do
+            adapter=$(echo "$adapter" | tr -d ' ')
+            # qairt is handled by setup_sdk.sh — skip its legacy script
+            if [ "$adapter" = "qairt" ]; then
+                ADAPTERS_INSTALLED=$((ADAPTERS_INSTALLED + 1))
+                continue
             fi
-        else
-            log_warn "Adapter script not found: ${setup_script}"
-            log_warn "Available: $(ls ${ADAPTERS_DIR}/setup_*.sh 2>/dev/null | xargs -I{} basename {} | sed 's/setup_//;s/\.sh//' | tr '\n' ',' | sed 's/,$//')"
-        fi
-    done
-
-    log_info "Adapters configured: ${ADAPTERS_INSTALLED}/${#ADAPTERS[@]}"
+            setup_script="${ADAPTERS_DIR}/setup_${adapter}.sh"
+            if [ -f "$setup_script" ]; then
+                chmod +x "$setup_script"
+                # shellcheck source=/dev/null
+                source "$setup_script"
+                setup_func="setup_${adapter}"
+                if declare -f "$setup_func" > /dev/null 2>&1; then
+                    if $setup_func; then
+                        ADAPTERS_INSTALLED=$((ADAPTERS_INSTALLED + 1))
+                    fi
+                fi
+            fi
+        done
+        log_info "Adapters configured: ${ADAPTERS_INSTALLED}/${#ADAPTERS[@]}"
+    fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -410,23 +436,31 @@ ACTIVATE_HEADER
 cat >> "${SCRIPT_DIR}/activate.sh" << ACTIVATE_BODY
 
 # Python virtual environment
-source "${VENV_DIR}/bin/activate"
-
-# QAIRT/SNPE SDK
-ACTIVATE_BODY
-
-if [ -n "${QAIRT_SDK_ROOT:-}" ] && [ -d "${QAIRT_SDK_ROOT}" ]; then
-    cat >> "${SCRIPT_DIR}/activate.sh" << ACTIVATE_SDK
-export QAIRT_SDK_ROOT="${QAIRT_SDK_ROOT}"
-export QNN_SDK_ROOT="${QAIRT_SDK_ROOT}"
-export SNPE_ROOT="${QAIRT_SDK_ROOT}"
-export PATH="${QAIRT_SDK_ROOT}/bin/x86_64-linux-clang:\${PATH}"
-export LD_LIBRARY_PATH="${QAIRT_SDK_ROOT}/lib/x86_64-linux-clang:\${LD_LIBRARY_PATH:-}"
-export PYTHONPATH="${QAIRT_SDK_ROOT}/lib/python/:\${PYTHONPATH:-}"
-ACTIVATE_SDK
-else
-    echo '# QAIRT SDK not installed — running in mock mode' >> "${SCRIPT_DIR}/activate.sh"
+if [ -d "${VENV_DIR}" ]; then
+    if [ -f "${VENV_DIR}/bin/activate" ]; then
+        source "${VENV_DIR}/bin/activate"
+    elif [ -f "${VENV_DIR}/Scripts/activate" ]; then
+        source "${VENV_DIR}/Scripts/activate"
+    fi
 fi
+
+# QAIRT/SNPE SDK — resolved at activation via sdk_manager so this works
+# correctly even if the SDK was added/updated after install.
+if command -v python >/dev/null 2>&1; then
+    eval "\$(python - <<'PY' 2>/dev/null
+from quad.sdk_manager import resolve_sdk_root
+info = resolve_sdk_root()
+if info:
+    print(f'export QAIRT_SDK_ROOT="{info.root}"')
+    print(f'export QNN_SDK_ROOT="{info.root}"')
+    print(f'export SNPE_ROOT="{info.root}"')
+    if info.bin_dir:
+        # cross-platform PATH separator handled by sdk_manager — use POSIX here
+        print(f'export PATH="{info.bin_dir}:\$PATH"')
+PY
+)" || true
+fi
+ACTIVATE_BODY
 
 if [ -n "${HEXAGON_TOOLS_DIR:-}" ]; then
     echo "export HEXAGON_TOOLS_DIR=\"${HEXAGON_TOOLS_DIR}\"" >> "${SCRIPT_DIR}/activate.sh"
@@ -456,17 +490,24 @@ echo -e "${BOLD}${GREEN}  Installation Complete!${NC}"
 echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
 echo "  Platform:  quad-agent installed"
-if [ -n "${QAIRT_SDK_ROOT:-}" ] && [ -d "${QAIRT_SDK_ROOT:-/x}" ]; then
-    echo -e "  QAIRT SDK: ${GREEN}v${QAIRT_VERSION} (real mode available)${NC}"
+if [ "$SDK_INSTALLED" = true ] && [ -n "$RESOLVED_SDK_ROOT" ]; then
+    echo -e "  QAIRT SDK: ${GREEN}${RESOLVED_SDK_FLAVOR} ${RESOLVED_SDK_VERSION} (real mode available)${NC}"
+    echo "             root: ${RESOLVED_SDK_ROOT}"
 else
-    echo -e "  QAIRT SDK: ${YELLOW}Not installed (mock mode)${NC}"
+    echo -e "  QAIRT SDK: ${YELLOW}Not installed — running in MOCK mode${NC}"
+    echo "             To enable real mode: ./install.sh --qairt-archive <path>"
 fi
 [ -n "$TEST_RESULT" ] && echo "  Tests:     $TEST_RESULT"
 echo ""
 echo -e "  ${BOLD}To get started:${NC}"
 echo ""
 echo "    source ./activate.sh         # Activate environment"
+if [ "$SDK_INSTALLED" = true ]; then
+    echo "    quad mode                    # Confirms 'real-mode: READY'"
+    echo "    quad doctor --real-mode      # Strict pre-flight on the SDK"
+fi
 echo "    ./launch.sh                  # Start MCP server"
 echo "    quad quickstart              # Interactive wizard"
+echo "    quad sdk status              # Show resolved SDK info"
 echo ""
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
