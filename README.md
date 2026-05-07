@@ -34,6 +34,33 @@
 
 ## Quick Start — One Command
 
+### TL;DR — three commands, fresh machine, real hardware
+
+```bash
+git clone https://github.com/pkr465/QUAD.git && cd QUAD
+
+# Windows:    .\bootstrap.ps1 -QairtArchive C:\Downloads\qairt.zip
+# Mac/Linux:  ./install.sh --qairt-archive ~/Downloads/qairt.zip
+./install.sh --qairt-archive ~/Downloads/qairt-2.45.0.260326.zip
+
+source ./activate.sh && quad mode      # → 'real-mode: READY'
+```
+
+That's it. Then `./launch.sh` to start the MCP server, or open Claude Code (it auto-detects).
+
+### Prerequisites (one-time, per machine)
+
+| OS | What you need before `git clone` |
+|---|---|
+| **Windows** | Nothing — `bootstrap.ps1` installs Git for Windows. Python 3.10+ from the Microsoft Store or `winget install Python.Python.3.12`. PowerShell 7 recommended (`winget install Microsoft.PowerShell`); 5.1 also works. |
+| **macOS** | Python 3.10+ (`brew install python@3.12`). bash 4+ (`brew install bash` if on default 3.2). |
+| **Linux** | Python 3.10+ (`apt install python3.10` / `dnf install python3.12`). bash already present. |
+
+For **real-hardware mode**, also download the QAIRT SDK once:
+1. Visit <https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk>
+2. Sign in with your Qualcomm developer account, accept the EULA
+3. Download the latest `.zip` (~1 GB) and save it anywhere — you'll point QUAD at it in step 2
+
 ### 0. Windows: install bash first (one-time)
 
 QUAD's installer is `install.sh` — a bash script. If you're on a fresh Windows
@@ -100,19 +127,95 @@ The installer:
 source ./activate.sh        # Re-resolves the SDK every shell start
 ```
 
-### 4. Confirm real-hardware mode (skip if mock-only)
-
-```bash
-quad mode                   # → real-mode: READY  (when SDK present)
-quad doctor --real-mode     # Strict pre-flight; exits non-zero on any SDK issue
+On Windows in cmd.exe instead of bash:
+```cmd
+.venv\Scripts\activate.bat
 ```
 
-### 5. Use it
+### 4. Verify
 
 ```bash
-./launch.sh                 # Start the MCP server (Claude Code auto-attaches)
-quad quickstart             # Interactive zero-to-inference wizard
+quad mode                   # → adapter mode + real-mode readiness
+quad sdk status             # → which SDK was discovered, where, version
+quad doctor                 # → 14 environment checks
+quad doctor --real-mode     # → strict pre-flight; exits non-zero on any SDK issue
 ```
+
+Expected output for a fully-real-mode install:
+
+```
+adapter_mode:    real
+sdk:             qairt 2.45.0.260326  (project:./sdks)
+real-mode:       READY
+  reason:        Real mode active. SDK root: ./sdks/qairt-2.45.0.260326
+```
+
+### 5. (Optional) Add the SDK after the fact
+
+If you ran `./install.sh --mock-only` first, or downloaded the SDK only after install:
+
+```bash
+quad sdk install ~/Downloads/qairt-2.45.0.260326.zip
+export QUAD_ADAPTER_MODE=real
+quad mode                   # should now report 'real-mode: READY'
+```
+
+### 6. Run
+
+#### A. As an MCP server for Claude Code (the typical path)
+
+```bash
+./launch.sh
+```
+
+`.claude/settings.json` is generated at install time so Claude Code auto-detects the MCP server with all 5 tools pre-approved. Open Claude Code and ask things like:
+
+> "Detect the hardware on this machine."
+> "Convert mobilenetv2.onnx to QNN INT8 and profile it on the NPU."
+> "Generate Windows C++ inference code for this model."
+
+#### B. Interactive zero-to-inference wizard
+
+```bash
+quad quickstart
+```
+
+#### C. Run a benchmark
+
+```bash
+quad benchmark                       # default model set
+quad benchmark --models mobilenetv2  # specific model
+quad benchmark --device npu          # specific runtime
+```
+
+#### D. End-to-end sample app on real hardware
+
+```bash
+# Install the small extra deps for the sample
+pip install onnxruntime-qnn psutil
+
+# Download a standard model (one-time)
+python -c "import urllib.request, os; os.makedirs('examples/models', exist_ok=True); \
+  urllib.request.urlretrieve('https://github.com/onnx/models/raw/main/validated/vision/classification/mobilenet/model/mobilenetv2-12.onnx', \
+  'examples/models/mobilenetv2-12.onnx')"
+
+# Run the full QUAD pipeline + real CPU benchmark on Oryon
+PYTHONUTF8=1 python examples/sample_app_real_hw.py --iterations 500 --warmup 50 \
+  --json-out examples/run_results.json
+```
+
+This produces a structured report with real measurements. See [`docs/SAMPLE_APP_REPORT.md`](docs/SAMPLE_APP_REPORT.md) for what the output looks like.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `quad mode` says `NOT READY` | Run `quad doctor --real-mode` — it tells you exactly what's missing. |
+| `bootstrap.ps1` won't run (execution policy) | Use `bootstrap.bat` instead, or `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1`. |
+| `bash: command not found` on Windows | Run `bootstrap.ps1` first — it installs Git Bash via winget. |
+| 8 tests fail on Windows | Pre-existing path-assertion bugs in modules unrelated to the install. Doesn't affect anything functional. |
+| SDK installed but not detected | `quad sdk discover` shows what was scanned. The SDK directory must contain `bin/<arch>/qairt-converter` (or `snpe-net-run`). |
+| Auto-download from qualcomm.com? | Not possible — the developer pages gate downloads behind EULA + account auth. Use `QAIRT_DOWNLOAD_URL` + `QAIRT_DOWNLOAD_TOKEN` for CI mirrors with pre-stored tokens. |
 
 > **Why not zero-credential auto-download?** Both Qualcomm developer pages
 > ([QAIRT](https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk),
