@@ -1,0 +1,38 @@
+---
+description: QUAD project development rules — Python MCP server for Qualcomm SDK abstraction
+globs: ["src/**/*.py", "tests/**/*.py"]
+---
+
+## Architecture Rules
+- All SDK interactions go through adapters in src/quad/adapters/
+- Never import SDK modules (qnn, snpe, hexagon) directly in tool handlers
+- All tool inputs/outputs use Pydantic models from src/quad/models/
+- MockAdapter must be updated whenever any adapter interface changes
+- Platform-specific logic lives in src/quad/platforms/ — tools are platform-agnostic
+- Code generation uses Jinja2 templates from templates/ — no inline string building
+
+## Code Style
+- Use async/await for all I/O operations (SDK calls, file ops, network)
+- Type hints required on all public functions (mypy --strict compatible)
+- Structured logging via structlog — no print() or logging.getLogger()
+- Error handling: raise QUADError subclasses, never bare Exception
+- Config values from quad.toml via ServerConfig — no hardcoded paths or constants
+
+## Testing
+- Every new tool/adapter method needs a corresponding unit test
+- Mock mode must work without any SDK installed
+- Use pytest fixtures from conftest.py for common setup
+- Tests must pass with `adapter_mode = "mock"` in CI
+
+## Patterns
+- Adapter pattern: SDKAdapter ABC → concrete adapters (QNN, SNPE, Mock)
+- Factory pattern: AdapterFactory selects adapter based on config
+- Template method: tools follow detect → validate → execute → format → respond
+- Pydantic for all boundaries: config parsing, API input, API output
+
+## Do NOT
+- Import QNN/SNPE/Hexagon modules at module level (breaks mock mode)
+- Use subprocess with shell=True (command injection risk)
+- Hardcode SDK paths (use config system)
+- Skip input validation (Pydantic handles it at tool boundaries)
+- Add SDK binaries or model files to git

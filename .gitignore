@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/settings.json
+
+# Claude Code — settings.json MUST be committed for MCP auto-detection
+# Do NOT add .claude/ to gitignore
+.claude/plans/
+.claude/worktrees/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# mypy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# Environment (secrets — never commit)
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models (large binaries)
+*.onnx
+*.dlc
+*.bin
+!configs/**/*.json
+
+# SDK archives (large — download separately)
+*.zip
+2.45.1/
+
+# QAIRT / SNPE SDK (large — not committed, install via setup script)
+qairt/
+
+# Word temp files
+~$*
+
+# Local config (contains paths specific to your machine)
+quad.toml
+
+# Node (VS Code extension)
+plugins/vscode/node_modules/
+plugins/vscode/out/
+
+# Output
+output/

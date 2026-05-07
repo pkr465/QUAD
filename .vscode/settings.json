@@ -1,0 +1,31 @@
+{
+  "python.defaultInterpreterPath": ".venv/bin/python",
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests"],
+  "python.analysis.typeCheckingMode": "basic",
+  "editor.formatOnSave": true,
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff"
+  },
+  "ruff.lint.args": ["--config=pyproject.toml"],
+  "files.exclude": {
+    "**/__pycache__": true,
+    ".venv": true,
+    "**/*.egg-info": true,
+    "qairt": true
+  },
+  "cmake.configureOnOpen": true,
+  "cmake.buildDirectory": "${workspaceFolder}/build",
+  "C_Cpp.default.includePath": [
+    "${env:QAIRT_SDK_ROOT}/include/SNPE",
+    "${env:QAIRT_SDK_ROOT}/include/QNN"
+  ],
+  "terminal.integrated.env.linux": {
+    "QAIRT_SDK_ROOT": "${workspaceFolder}/qairt/2.45.0.260326",
+    "SNPE_ROOT": "${workspaceFolder}/qairt/2.45.0.260326"
+  },
+  "terminal.integrated.env.osx": {
+    "QAIRT_SDK_ROOT": "${workspaceFolder}/qairt/2.45.0.260326",
+    "SNPE_ROOT": "${workspaceFolder}/qairt/2.45.0.260326"
+  }
+}

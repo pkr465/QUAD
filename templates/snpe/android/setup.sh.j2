@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════
+# QUAD — Android Project Setup Script
+# Copies SNPE AAR, model, and assets into the Android project.
+#
+# Usage: ./setup.sh [model_path]
+# ═══════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+MODEL_PATH="${1:-{{ model_path }}}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "═══════════════════════════════════════════════════════"
+echo "  QUAD — Android Project Setup"
+echo "═══════════════════════════════════════════════════════"
+
+# Check QAIRT SDK
+if [ -z "${QAIRT_SDK_ROOT:-}" ]; then
+    echo "ERROR: QAIRT_SDK_ROOT not set. Run: source activate.sh"
+    exit 1
+fi
+
+# 1. Copy SNPE AAR
+echo ""
+echo "▸ Copying SNPE AAR..."
+mkdir -p "${SCRIPT_DIR}/app/libs"
+SNPE_AAR="${QAIRT_SDK_ROOT}/lib/android/snpe-release.aar"
+if [ -f "$SNPE_AAR" ]; then
+    cp "$SNPE_AAR" "${SCRIPT_DIR}/app/libs/"
+    echo "  ✓ snpe-release.aar copied to app/libs/"
+else
+    echo "  ✗ snpe-release.aar not found at: $SNPE_AAR"
+    exit 1
+fi
+
+# 2. Copy Platform Validator AAR (optional)
+PV_AAR="${QAIRT_SDK_ROOT}/lib/android/platformvalidator-release.aar"
+if [ -f "$PV_AAR" ]; then
+    cp "$PV_AAR" "${SCRIPT_DIR}/app/libs/"
+    echo "  ✓ platformvalidator-release.aar copied"
+fi
+
+# 3. Copy model to assets
+echo ""
+echo "▸ Copying model..."
+mkdir -p "${SCRIPT_DIR}/app/src/main/assets"
+if [ -f "$MODEL_PATH" ]; then
+    cp "$MODEL_PATH" "${SCRIPT_DIR}/app/src/main/assets/"
+    echo "  ✓ $(basename $MODEL_PATH) → app/src/main/assets/"
+else
+    echo "  ✗ Model not found: $MODEL_PATH"
+    echo "    Place your .dlc model in app/src/main/assets/"
+fi
+
+# 4. Copy labels (if available)
+LABELS_PATH="${QAIRT_SDK_ROOT}/examples/Models/InceptionV3/data/imagenet_slim_labels.txt"
+if [ -f "$LABELS_PATH" ]; then
+    cp "$LABELS_PATH" "${SCRIPT_DIR}/app/src/main/assets/labels.txt"
+    echo "  ✓ labels.txt copied to assets"
+fi
+
+echo ""
+echo "═══════════════════════════════════════════════════════"
+echo "  Setup complete!"
+echo ""
+echo "  Build:   ./gradlew assembleDebug"
+echo "  Install: adb install -r app/build/outputs/apk/debug/app-debug.apk"
+echo "═══════════════════════════════════════════════════════"

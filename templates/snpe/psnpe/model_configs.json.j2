@@ -1,0 +1,44 @@
+{
+  "models": [
+    {
+      "name": "{{ model_name | default('MyModel') }}",
+      "modelFile": "{{ model_file_path | default(model_name ~ '.dlc') }}",
+      "executeMode": "{{ execution_mode | default('sync') }}",
+      "enableInitCache": {{ enable_init_cache | default('false') | lower }},
+      "platformOptions": "{{ platform_options | default('unsignedPD:ON') }}",
+      "bulkSize": {{ bulk_size | default(4) }},
+      "buildConfig": [
+        {% for config in build_configs | default([{"runtime": "DSP", "batch": 1, "userBufferMode": "TF8", "performanceProfile": "burst", "enableCPUFallback": false}]) %}
+        {
+          "runtime": "{{ config.runtime | default('DSP') }}",
+          "batch": {{ config.batch | default(1) }},
+          "userBufferMode": "{{ config.userBufferMode | default('TF8') }}",
+          "performanceProfile": "{{ config.performanceProfile | default('burst') }}",
+          "enableCPUFallback": {{ config.enableCPUFallback | default(false) | lower }}{% if config.dsp_arch is defined %},
+          "dspArch": "{{ config.dsp_arch }}"{% endif %}{% if config.runtime_extensions is defined %},
+          "runtimeExtensions": "{{ config.runtime_extensions }}"{% endif %}
+        }{{ "," if not loop.last }}
+        {% endfor %}
+      ]
+    }{% if extra_models is defined %}{% for extra in extra_models %},
+    {
+      "name": "{{ extra.name }}",
+      "modelFile": "{{ extra.modelFile | default(extra.name ~ '.dlc') }}",
+      "executeMode": "{{ extra.executeMode | default('sync') }}",
+      "enableInitCache": {{ extra.enableInitCache | default('false') | lower }},
+      "platformOptions": "{{ extra.platformOptions | default('unsignedPD:ON') }}",
+      "bulkSize": {{ extra.bulkSize | default(4) }},
+      "buildConfig": [
+        {% for config in extra.buildConfig | default([{"runtime": "DSP", "batch": 1, "userBufferMode": "TF8", "performanceProfile": "burst", "enableCPUFallback": false}]) %}
+        {
+          "runtime": "{{ config.runtime | default('DSP') }}",
+          "batch": {{ config.batch | default(1) }},
+          "userBufferMode": "{{ config.userBufferMode | default('TF8') }}",
+          "performanceProfile": "{{ config.performanceProfile | default('burst') }}",
+          "enableCPUFallback": {{ config.enableCPUFallback | default(false) | lower }}
+        }{{ "," if not loop.last }}
+        {% endfor %}
+      ]
+    }{% endfor %}{% endif %}
+  ]
+}

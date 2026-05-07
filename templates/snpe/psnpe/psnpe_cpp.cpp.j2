@@ -1,0 +1,473 @@
+// =============================================================================
+// PSNPE C++ Application Template
+// Generated for model: {{ model_name | default('model') }}
+// Execution mode: {{ execution_mode | default('sync') }}
+// Runtime: {{ runtime | default('dsp') | upper }}
+// Instances: {{ num_instances | default(4) }}
+// Batch size: {{ batch_size | default(1) }}
+// =============================================================================
+
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <memory>
+#include <functional>
+#include <algorithm>
+#include <cstring>
+
+#include "PSNPE/PSNPE.hpp"
+#include "PSNPE/BuildConfig.hpp"
+#include "PSNPE/RuntimeConfig.hpp"
+#include "PSNPE/UserBufferList.hpp"
+#include "DlContainer/IDlContainer.hpp"
+#include "DlSystem/TensorShape.hpp"
+#include "DlSystem/IUserBuffer.hpp"
+#include "DlSystem/UserBufferMap.hpp"
+#include "DlSystem/StringList.hpp"
+#include "DlSystem/RuntimeList.hpp"
+#include "DlSystem/PerformanceProfile.hpp"
+#include "SNPE/SNPEUtil.hpp"
+
+// ---------------------------------------------------------------------------
+// Global / configurable constants
+// ---------------------------------------------------------------------------
+static const std::string MODEL_PATH      = "{{ model_path | default('model.dlc') }}";
+static const int         NUM_INSTANCES   = {{ num_instances | default(4) }};
+static const int         BATCH_SIZE      = {{ batch_size | default(1) }};
+static const std::string OUTPUT_DIR      = "{{ output_dir | default('./output') }}";
+
+// ---------------------------------------------------------------------------
+// Helper: read a text file line by line
+// ---------------------------------------------------------------------------
+static std::vector<std::string> readLines(const std::string &path) {
+    std::vector<std::string> lines;
+    std::ifstream f(path);
+    if (!f.is_open()) {
+        std::cerr << "[ERROR] Cannot open file: " << path << std::endl;
+        return lines;
+    }
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty()) lines.push_back(line);
+    }
+    return lines;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: read raw binary file into a float vector
+// ---------------------------------------------------------------------------
+static std::vector<float> readRawFile(const std::string &path) {
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) {
+        std::cerr << "[ERROR] Cannot open raw file: " << path << std::endl;
+        return {};
+    }
+    std::streamsize sz = f.tellg();
+    f.seekg(0, std::ios::beg);
+    std::vector<float> buf(sz / sizeof(float));
+    f.read(reinterpret_cast<char *>(buf.data()), sz);
+    return buf;
+}
+
+// ---------------------------------------------------------------------------
+// setupRuntimeConfigs — build one RuntimeConfig per parallel instance
+// ---------------------------------------------------------------------------
+zdl::PSNPE::RuntimeConfigList setupRuntimeConfigs(
+    const std::string &runtimeStr,
+    bool cpuFallback,
+    zdl::DlSystem::PerformanceProfile_t perfProfile)
+{
+    zdl::PSNPE::RuntimeConfigList configList;
+
+    for (int i = 0; i < NUM_INSTANCES; ++i) {
+        zdl::PSNPE::RuntimeConfig rc;
+
+        // Runtime selection
+        {% if runtime | default('dsp') | lower == 'dsp' %}
+        rc.runtime = zdl::DlSystem::Runtime_t::DSP;
+        {% elif runtime | default('dsp') | lower == 'gpu' %}
+        rc.runtime = zdl::DlSystem::Runtime_t::GPU;
+        {% elif runtime | default('dsp') | lower == 'aip' %}
+        rc.runtime = zdl::DlSystem::Runtime_t::AIP_FIXED_TF;
+        {% else %}
+        rc.runtime = zdl::DlSystem::Runtime_t::CPU;
+        {% endif %}
+
+        // Override from command-line argument when provided
+        if (!runtimeStr.empty()) {
+            if      (runtimeStr == "dsp") rc.runtime = zdl::DlSystem::Runtime_t::DSP;
+            else if (runtimeStr == "gpu") rc.runtime = zdl::DlSystem::Runtime_t::GPU;
+            else if (runtimeStr == "aip") rc.runtime = zdl::DlSystem::Runtime_t::AIP_FIXED_TF;
+            else                          rc.runtime = zdl::DlSystem::Runtime_t::CPU;
+        }
+
+        rc.enableCPUFallback  = cpuFallback;
+        rc.performanceProfile = perfProfile;
+        configList.push_back(rc);
+    }
+
+    return configList;
+}
+
+// ---------------------------------------------------------------------------
+// setupBuildConfig — combine RuntimeConfigList + container into a BuildConfig
+// ---------------------------------------------------------------------------
+zdl::PSNPE::BuildConfig setupBuildConfig(
+    zdl::PSNPE::RuntimeConfigList       &runtimeConfigs,
+    zdl::DlContainer::IDlContainer      *container,
+    zdl::PSNPE::ExecutionMode_t          mode,
+    std::function<void(zdl::PSNPE::OutputAsyncCallbackParam)>  oCallback  = nullptr,
+    std::function<void(zdl::PSNPE::InputOutputAsyncCallbackParam)> ioCallback = nullptr)
+{
+    zdl::PSNPE::BuildConfig bc;
+    bc.container          = container;
+    bc.runtimeConfigList  = runtimeConfigs;
+    bc.executionMode      = mode;
+    bc.outputBufferCount  = 2; // double-buffering
+
+    if (mode == zdl::PSNPE::ExecutionMode_t::OUTPUT_ASYNC && oCallback) {
+        bc.outputCallback = oCallback;
+    }
+    if (mode == zdl::PSNPE::ExecutionMode_t::INPUT_OUTPUT_ASYNC && ioCallback) {
+        bc.inputOutputCallback = ioCallback;
+    }
+
+    return bc;
+}
+
+// ---------------------------------------------------------------------------
+// createUserBuffers — allocate UserBufferList for inputs and outputs
+// ---------------------------------------------------------------------------
+void createUserBuffers(
+    zdl::PSNPE::PSNPE                               *psnpe,
+    std::vector<zdl::DlSystem::UserBufferMap>       &inputMapList,
+    std::vector<zdl::DlSystem::UserBufferMap>       &outputMapList)
+{
+    const auto &inputNames  = psnpe->getInputTensorNames();
+    const auto &outputNames = psnpe->getOutputTensorNames();
+
+    inputMapList.resize(NUM_INSTANCES);
+    outputMapList.resize(NUM_INSTANCES);
+
+    for (int inst = 0; inst < NUM_INSTANCES; ++inst) {
+        // --- Input buffers ---
+        for (size_t i = 0; i < inputNames.size(); ++i) {
+            const char *name = inputNames.at(i);
+            zdl::DlSystem::TensorShape shape = psnpe->getInputDimensions(name);
+            size_t elements = 1;
+            for (size_t d = 0; d < shape.rank(); ++d) elements *= shape[d];
+            size_t bytes = elements * sizeof(float);
+
+            zdl::DlSystem::UserBufferEncoding_FloatN encoding(32);
+            std::vector<size_t> strides(shape.rank());
+            strides.back() = sizeof(float);
+            for (int d = static_cast<int>(shape.rank()) - 2; d >= 0; --d)
+                strides[d] = strides[d + 1] * shape[d + 1];
+
+            auto ub = zdl::SNPE::SNPEUtil::createUserBuffer(
+                nullptr, bytes, strides, &encoding);
+            inputMapList[inst].add(name, ub.release());
+        }
+
+        // --- Output buffers ---
+        for (size_t i = 0; i < outputNames.size(); ++i) {
+            const char *name = outputNames.at(i);
+            zdl::DlSystem::TensorShape shape = psnpe->getOutputDimensions(name);
+            size_t elements = 1;
+            for (size_t d = 0; d < shape.rank(); ++d) elements *= shape[d];
+
+            {% if 'tf8' in (execution_mode | default('sync') | lower) or runtime | default('dsp') | lower == 'dsp' %}
+            size_t bytes = elements * sizeof(uint8_t);
+            zdl::DlSystem::UserBufferEncoding_TF8 encoding(0, 1.0f / 255.0f);
+            {% else %}
+            size_t bytes = elements * sizeof(float);
+            zdl::DlSystem::UserBufferEncoding_FloatN encoding(32);
+            {% endif %}
+
+            std::vector<size_t> strides(shape.rank());
+            strides.back() = 1;
+            for (int d = static_cast<int>(shape.rank()) - 2; d >= 0; --d)
+                strides[d] = strides[d + 1] * shape[d + 1];
+
+            auto ub = zdl::SNPE::SNPEUtil::createUserBuffer(
+                nullptr, bytes, strides, &encoding);
+            outputMapList[inst].add(name, ub.release());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// loadInputs — fill input UserBufferMaps from raw files
+// ---------------------------------------------------------------------------
+void loadInputs(
+    zdl::PSNPE::PSNPE                         *psnpe,
+    std::vector<zdl::DlSystem::UserBufferMap> &inputMapList,
+    const std::vector<std::string>            &inputFiles)
+{
+    const auto &inputNames = psnpe->getInputTensorNames();
+
+    for (int inst = 0; inst < NUM_INSTANCES && inst < static_cast<int>(inputFiles.size()); ++inst) {
+        // inputFiles[inst] may be a comma-separated list of per-input files
+        std::vector<std::string> perInputFiles;
+        std::stringstream ss(inputFiles[inst]);
+        std::string token;
+        while (std::getline(ss, token, ':')) perInputFiles.push_back(token);
+
+        for (size_t i = 0; i < inputNames.size(); ++i) {
+            const char *name = inputNames.at(i);
+            std::string filePath = (i < perInputFiles.size()) ? perInputFiles[i] : perInputFiles[0];
+
+            auto data = readRawFile(filePath);
+            auto *ub  = inputMapList[inst].getUserBuffer(name);
+            if (!ub) { std::cerr << "[WARN] No buffer for input: " << name << std::endl; continue; }
+
+            std::memcpy(ub->getBuffer(), data.data(),
+                        std::min(data.size() * sizeof(float), ub->getSize()));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// saveOutput — write output UserBufferMap tensors to .raw files
+// ---------------------------------------------------------------------------
+void saveOutput(
+    zdl::DlSystem::UserBufferMap &outputMap,
+    const std::string            &outputDir,
+    int                           batchIdx,
+    int                           batchSize,
+    bool                          isTf8)
+{
+    auto outputNames = outputMap.getUserBufferNames();
+    for (size_t i = 0; i < outputNames.size(); ++i) {
+        const char *name = outputNames.at(i);
+        auto *ub = outputMap.getUserBuffer(name);
+        if (!ub) continue;
+
+        for (int b = 0; b < batchSize; ++b) {
+            std::ostringstream fname;
+            fname << outputDir << "/Result_" << (batchIdx * batchSize + b)
+                  << "/" << name << ".raw";
+
+            // Create parent dir (best-effort)
+            std::string dir = fname.str().substr(0, fname.str().rfind('/'));
+            std::string mkdirCmd = "mkdir -p " + dir;
+            (void)std::system(mkdirCmd.c_str());
+
+            std::ofstream out(fname.str(), std::ios::binary);
+            if (!out.is_open()) {
+                std::cerr << "[ERROR] Cannot write: " << fname.str() << std::endl;
+                continue;
+            }
+
+            size_t elemBytes = isTf8 ? sizeof(uint8_t) : sizeof(float);
+            size_t totalBytes = ub->getSize();
+            size_t batchBytes = totalBytes / batchSize;
+            const char *ptr = static_cast<const char *>(ub->getBuffer());
+            out.write(ptr + b * batchBytes, batchBytes);
+            std::cout << "[INFO] Saved: " << fname.str() << std::endl;
+        }
+    }
+}
+
+// ===========================================================================
+// MODE 1 — Synchronous execution
+// ===========================================================================
+void executeSyncMode(
+    zdl::PSNPE::PSNPE                         *psnpe,
+    std::vector<zdl::DlSystem::UserBufferMap> &inputMapList,
+    std::vector<zdl::DlSystem::UserBufferMap> &outputMapList,
+    const std::string                         &outputDir,
+    int                                        batchIdx)
+{
+    if (!psnpe->execute(inputMapList, outputMapList)) {
+        std::cerr << "[ERROR] PSNPE execute (sync) failed." << std::endl;
+        return;
+    }
+
+    for (int inst = 0; inst < NUM_INSTANCES; ++inst) {
+        saveOutput(outputMapList[inst], outputDir, batchIdx * NUM_INSTANCES + inst,
+                   BATCH_SIZE, /* isTf8= */false);
+    }
+}
+
+// ===========================================================================
+// MODE 2 — Output-async execution
+// ===========================================================================
+void executeOutputAsyncMode(
+    zdl::PSNPE::PSNPE                         *psnpe,
+    std::vector<zdl::DlSystem::UserBufferMap> &inputMapList,
+    const std::string                         &outputDir)
+{
+    // The OCallback is registered via BuildConfig at construction time.
+    // Here we just trigger execution; results arrive in the callback.
+    if (!psnpe->execute(inputMapList)) {
+        std::cerr << "[ERROR] PSNPE execute (output-async) failed." << std::endl;
+    }
+}
+
+// OCallback — invoked by PSNPE when output is ready for a batch
+static void OCallback(zdl::PSNPE::OutputAsyncCallbackParam param) {
+    std::cout << "[OCallback] Received output for instance " << param.instanceIndex << std::endl;
+
+    auto &outputMap = *(param.outputMap);
+    // NOTE: Process or copy data here before returning; buffer may be reused.
+    saveOutput(outputMap, OUTPUT_DIR, static_cast<int>(param.instanceIndex),
+               BATCH_SIZE, /* isTf8= */false);
+}
+
+// ===========================================================================
+// MODE 3 — Input-output async execution
+// ===========================================================================
+
+// IOCallback — invoked when PSNPE needs the next input AND output is ready
+static void IOCallback(zdl::PSNPE::InputOutputAsyncCallbackParam param) {
+    std::cout << "[IOCallback] instance=" << param.instanceIndex
+              << " inputIdx=" << param.inputIndex << std::endl;
+
+    // Retrieve finished output
+    if (param.outputMap) {
+        saveOutput(*(param.outputMap), OUTPUT_DIR,
+                   static_cast<int>(param.instanceIndex), BATCH_SIZE, false);
+    }
+
+    // Provide next input via param.inputMap
+    // (caller fills param.inputMap->getUserBuffer(...) with next frame data)
+}
+
+// inputCallback — supplies input data for a given instance + slot index
+static void inputCallback(zdl::PSNPE::InputOutputAsyncCallbackParam param,
+                          const std::vector<std::string>            &allFiles)
+{
+    if (!param.inputMap) return;
+
+    size_t fileIdx = param.instanceIndex; // simplified; real code tracks offset
+    if (fileIdx >= allFiles.size()) return;
+
+    auto *ub = param.inputMap->getUserBuffer("data"); // replace with actual input name
+    if (!ub) return;
+
+    auto data = readRawFile(allFiles[fileIdx]);
+    std::memcpy(ub->getBuffer(), data.data(),
+                std::min(data.size() * sizeof(float), ub->getSize()));
+}
+
+void executeInputOutputAsyncMode(
+    zdl::PSNPE::PSNPE            *psnpe,
+    const std::vector<std::string> &inputFiles)
+{
+    // executeInputOutputAsync is triggered by the registered IOCallback.
+    // Kick off execution; PSNPE handles the double-buffered pipeline.
+    if (!psnpe->executeInputOutputAsync()) {
+        std::cerr << "[ERROR] PSNPE executeInputOutputAsync failed." << std::endl;
+    }
+    // Results arrive through IOCallback; wait for completion externally.
+}
+
+// ===========================================================================
+// main
+// ===========================================================================
+int main(int argc, char **argv) {
+    // ---- Parse arguments ---------------------------------------------------
+    std::string containerPath = MODEL_PATH;
+    std::string inputListPath;
+    std::string outputDir     = OUTPUT_DIR;
+    std::string runtimeStr    = "{{ runtime | default('dsp') }}";
+    std::string modeStr       = "{{ execution_mode | default('sync') }}";
+    std::string perfStr       = "burst";
+    bool        cpuFallback   = false;
+
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if      (arg == "--container"   && i + 1 < argc) containerPath = argv[++i];
+        else if (arg == "--input_list"  && i + 1 < argc) inputListPath = argv[++i];
+        else if (arg == "--output_dir"  && i + 1 < argc) outputDir     = argv[++i];
+        else if (arg == "--runtime_mode"&& i + 1 < argc) modeStr       = argv[++i];
+        else if (arg == "--use_dsp")  runtimeStr = "dsp";
+        else if (arg == "--use_cpu")  runtimeStr = "cpu";
+        else if (arg == "--use_gpu")  runtimeStr = "gpu";
+        else if (arg == "--perf_profile" && i + 1 < argc) perfStr      = argv[++i];
+        else if (arg == "--cpu_fallback") cpuFallback = true;
+        else { std::cerr << "[WARN] Unknown argument: " << arg << std::endl; }
+    }
+
+    // ---- Load container ----------------------------------------------------
+    std::unique_ptr<zdl::DlContainer::IDlContainer> container(
+        zdl::DlContainer::IDlContainer::open(containerPath));
+    if (!container) {
+        std::cerr << "[ERROR] Failed to load container: " << containerPath << std::endl;
+        return 1;
+    }
+
+    // ---- Performance profile -----------------------------------------------
+    zdl::DlSystem::PerformanceProfile_t perfProfile =
+        zdl::DlSystem::PerformanceProfile_t::BURST;
+    if (perfStr == "high_performance")
+        perfProfile = zdl::DlSystem::PerformanceProfile_t::HIGH_PERFORMANCE;
+    else if (perfStr == "balanced")
+        perfProfile = zdl::DlSystem::PerformanceProfile_t::BALANCED;
+    else if (perfStr == "power_saver")
+        perfProfile = zdl::DlSystem::PerformanceProfile_t::POWER_SAVER;
+
+    // ---- Execution mode ----------------------------------------------------
+    zdl::PSNPE::ExecutionMode_t execMode = zdl::PSNPE::ExecutionMode_t::SYNC;
+    if      (modeStr == "outputAsync"      ) execMode = zdl::PSNPE::ExecutionMode_t::OUTPUT_ASYNC;
+    else if (modeStr == "inputOutputAsync" ) execMode = zdl::PSNPE::ExecutionMode_t::INPUT_OUTPUT_ASYNC;
+
+    // ---- Build PSNPE -------------------------------------------------------
+    auto runtimeConfigs = setupRuntimeConfigs(runtimeStr, cpuFallback, perfProfile);
+
+    zdl::PSNPE::BuildConfig bc = setupBuildConfig(
+        runtimeConfigs, container.get(), execMode,
+        (execMode == zdl::PSNPE::ExecutionMode_t::OUTPUT_ASYNC)
+            ? std::function<void(zdl::PSNPE::OutputAsyncCallbackParam)>(OCallback)
+            : nullptr,
+        (execMode == zdl::PSNPE::ExecutionMode_t::INPUT_OUTPUT_ASYNC)
+            ? std::function<void(zdl::PSNPE::InputOutputAsyncCallbackParam)>(IOCallback)
+            : nullptr);
+
+    auto psnpe = zdl::PSNPE::PSNPE::build(bc);
+    if (!psnpe) {
+        std::cerr << "[ERROR] Failed to build PSNPE." << std::endl;
+        return 1;
+    }
+
+    // ---- Allocate user buffers ---------------------------------------------
+    std::vector<zdl::DlSystem::UserBufferMap> inputMapList, outputMapList;
+    createUserBuffers(psnpe.get(), inputMapList, outputMapList);
+
+    // ---- Read input list ---------------------------------------------------
+    std::vector<std::string> inputFiles;
+    if (!inputListPath.empty()) inputFiles = readLines(inputListPath);
+    if (inputFiles.empty()) {
+        std::cerr << "[ERROR] No input files found in: " << inputListPath << std::endl;
+        return 1;
+    }
+
+    // ---- Execute -----------------------------------------------------------
+    std::string mkdirCmd = "mkdir -p " + outputDir;
+    (void)std::system(mkdirCmd.c_str());
+
+    int numBatches = static_cast<int>(inputFiles.size()) / NUM_INSTANCES;
+
+    for (int batch = 0; batch < numBatches; ++batch) {
+        std::vector<std::string> batchFiles(
+            inputFiles.begin() + batch * NUM_INSTANCES,
+            inputFiles.begin() + (batch + 1) * NUM_INSTANCES);
+
+        loadInputs(psnpe.get(), inputMapList, batchFiles);
+
+        {% if execution_mode | default('sync') == 'sync' %}
+        executeSyncMode(psnpe.get(), inputMapList, outputMapList, outputDir, batch);
+        {% elif execution_mode | default('sync') == 'outputAsync' %}
+        executeOutputAsyncMode(psnpe.get(), inputMapList, outputDir);
+        {% else %}
+        executeInputOutputAsyncMode(psnpe.get(), batchFiles);
+        {% endif %}
+    }
+
+    std::cout << "[INFO] Done. Results in: " << outputDir << std::endl;
+    return 0;
+}

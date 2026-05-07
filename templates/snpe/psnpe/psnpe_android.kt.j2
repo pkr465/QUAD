@@ -1,0 +1,301 @@
+// =============================================================================
+// Android Kotlin PSNPE Template
+// Model:          {{ model_name | default('MyModel') }}
+// Execution mode: {{ execution_mode | default('sync') }}
+// Runtime:        {{ runtime | default('dsp') | upper }}
+// Bulk size:      {{ bulk_size | default(4) }}
+// =============================================================================
+
+package {{ android_package | default('com.example.psnpedemo') }}
+
+import android.content.Context
+import android.util.Log
+import com.qualcomm.qti.psnpe.PSNPEManager
+import com.qualcomm.qti.psnpe.PSNPEManager.PSNPEManagerListener
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileInputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
+/**
+ * PSNPE inference wrapper for {{ model_name | default('MyModel') }}.
+ *
+ * Execution mode : {{ execution_mode | default('sync') }}
+ * Runtime        : {{ runtime | default('dsp') | upper }}
+ * Bulk size      : {{ bulk_size | default(4) }}
+ */
+class {{ model_name | default('MyModel') | replace('-','') | replace('_','') | capitalize }}PsnpeInference(
+    private val context: Context,
+    private val nativeLibPath: String,
+    private val configPath: String
+) {
+
+    companion object {
+        private const val TAG       = "PSNPE_{{ model_name | default('MyModel') }}"
+        private const val MODEL_NAME = "{{ model_name | default('MyModel') }}"
+        private const val BULK_SIZE  = {{ bulk_size | default(4) }}
+        private const val RUNTIME    = "{{ runtime | default('dsp') | upper }}"
+        private const val EXEC_MODE  = "{{ execution_mode | default('sync') }}"
+    }
+
+    // -------------------------------------------------------------------------
+    // Lifecycle
+    // -------------------------------------------------------------------------
+
+    /**
+     * Initialize PSNPEManager and load the model.
+     * Must be called before any inference.
+     *
+     * @param configJsonPath  Full path to model_configs.json on the device.
+     *                        Defaults to [configPath]/model_configs.json.
+     */
+    fun initialize(configJsonPath: String = "$configPath/model_configs.json") {
+        Log.i(TAG, "Initializing PSNPEManager — nativeLibPath=$nativeLibPath")
+        PSNPEManager.init(nativeLibPath, configJsonPath)
+
+        Log.i(TAG, "Building model: $MODEL_NAME")
+        PSNPEManager.buildFromFile(MODEL_NAME)
+        Log.i(TAG, "Model built successfully.")
+    }
+
+    /** Release all PSNPE resources. */
+    fun release() {
+        PSNPEManager.release()
+        Log.i(TAG, "PSNPEManager released.")
+    }
+
+    // =========================================================================
+    // MODE 1 — Synchronous
+    // =========================================================================
+
+    {% if execution_mode | default('sync') == 'sync' %}
+    /**
+     * Run synchronous inference on a list of float arrays.
+     *
+     * @param inputs  List of float arrays, one per parallel instance (bulkSize).
+     * @return        List of result float arrays, one per instance.
+     */
+    fun runSync(inputs: List<FloatArray>): List<FloatArray> {
+        val results = mutableListOf<FloatArray>()
+
+        // Load input data for each instance in the bulk
+        inputs.forEachIndexed { i, floatArray ->
+            Log.d(TAG, "Loading input[$i], size=${floatArray.size}")
+            PSNPEManager.loadData(floatArray, i)
+        }
+
+        Log.d(TAG, "Executing PSNPE sync (bulk=$BULK_SIZE)")
+        PSNPEManager.executeSync()
+
+        // Retrieve outputs
+        for (i in inputs.indices) {
+            val output = PSNPEManager.getOutputSync(i)
+            Log.d(TAG, "Output[$i] size=${output?.size ?: 0}")
+            output?.let { results.add(it) }
+        }
+
+        return results
+    }
+
+    /**
+     * Convenience: infer a single input (wraps in a bulk of 1).
+     */
+    fun runSyncSingle(input: FloatArray): FloatArray? {
+        return runSync(listOf(input)).firstOrNull()
+    }
+
+    // =========================================================================
+    // MODE 2 — Output-async
+    // =========================================================================
+
+    {% elif execution_mode | default('sync') == 'outputAsync' %}
+    /**
+     * Run output-async inference.
+     * Results are delivered via [PSNPEManagerListener.onOutputAvailable].
+     *
+     * @param inputs    List of float arrays, one per instance.
+     * @param listener  Callback that receives output when ready.
+     */
+    fun runOutputAsync(
+        inputs: List<FloatArray>,
+        listener: PSNPEManagerListener
+    ) {
+        PSNPEManager.registerPSNPEManagerListener(listener)
+
+        inputs.forEachIndexed { i, floatArray ->
+            Log.d(TAG, "Loading input[$i] for output-async")
+            PSNPEManager.loadData(floatArray, i)
+        }
+
+        Log.d(TAG, "Executing PSNPE output-async")
+        PSNPEManager.executeOutputAsync()
+    }
+
+    /**
+     * Convenience coroutine wrapper: suspends until results arrive or
+     * [timeoutMs] expires.
+     */
+    suspend fun runOutputAsyncSuspend(
+        inputs: List<FloatArray>,
+        timeoutMs: Long = 5_000L
+    ): List<FloatArray> = withContext(Dispatchers.IO) {
+        val results = mutableListOf<FloatArray>()
+        val latch   = java.util.concurrent.CountDownLatch(inputs.size)
+
+        val listener = object : PSNPEManagerListener {
+            override fun onOutputAvailable(output: FloatArray?, instanceIndex: Int) {
+                Log.d(TAG, "onOutputAvailable: instance=$instanceIndex size=${output?.size}")
+                output?.let { results.add(it) }
+                latch.countDown()
+            }
+            override fun onError(message: String?) {
+                Log.e(TAG, "PSNPE error: $message")
+                latch.countDown()
+            }
+        }
+
+        runOutputAsync(inputs, listener)
+        latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        results
+    }
+
+    // =========================================================================
+    // MODE 3 — Input-output async
+    // =========================================================================
+
+    {% else %}
+    /**
+     * Run input-output async inference.
+     *
+     * PSNPE drives a fully double-buffered pipeline:
+     *  - [IOAsyncInputCallback] is called whenever PSNPE needs the next input.
+     *  - Output is available via [getOutputCallback] / [PSNPEManagerListener].
+     *
+     * @param fileList   List of raw file paths on the device.
+     * @param bulkIndex  Starting bulk index (used to calculate file offset).
+     * @param totalSize  Total number of samples in [fileList].
+     */
+    fun runInputOutputAsync(
+        fileList:   List<String>,
+        bulkIndex:  Int = 0,
+        totalSize:  Int = fileList.size
+    ) {
+        Log.d(TAG, "Executing PSNPE IO-async: bulkIndex=$bulkIndex totalSize=$totalSize")
+        PSNPEManager.executeInputOutputAsync(fileList, bulkIndex, totalSize)
+    }
+
+    /**
+     * Register an IO-async input callback.
+     * PSNPEManager calls this to request the next chunk of input data.
+     */
+    fun registerIOAsyncInputCallback(callback: PSNPEManager.IOAsyncInputCallback) {
+        PSNPEManager.registerIOAsyncInputCallback(callback)
+    }
+
+    /**
+     * Retrieve the output callback handle for IO-async mode.
+     */
+    fun getOutputCallback(): PSNPEManager.IOAsyncOutputCallback? {
+        return PSNPEManager.getOutputCallback()
+    }
+
+    {% endif %}
+
+    // =========================================================================
+    // I/O Utilities
+    // =========================================================================
+
+    /**
+     * Load a raw binary file from [path] as a FloatArray.
+     */
+    fun loadRawFile(path: String): FloatArray {
+        val file = File(path)
+        if (!file.exists()) {
+            Log.e(TAG, "File not found: $path")
+            return FloatArray(0)
+        }
+        val bytes = file.readBytes()
+        val buf   = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
+        return FloatArray(buf.remaining()) { buf.get() }
+    }
+
+    /**
+     * Save a FloatArray as a little-endian raw binary file.
+     */
+    fun saveRawFile(data: FloatArray, outputPath: String) {
+        val file = File(outputPath)
+        file.parentFile?.mkdirs()
+        val buf = ByteBuffer.allocate(data.size * 4).order(ByteOrder.LITTLE_ENDIAN)
+        data.forEach { buf.putFloat(it) }
+        file.writeBytes(buf.array())
+        Log.i(TAG, "Saved: $outputPath")
+    }
+
+    /**
+     * Read an input_list text file and return file paths grouped into
+     * batches of [BULK_SIZE].
+     */
+    fun readInputList(inputListPath: String): List<List<String>> {
+        val lines = File(inputListPath).readLines().filter { it.isNotBlank() }
+        return lines.chunked(BULK_SIZE)
+    }
+}
+
+// =============================================================================
+// Example Activity / Usage
+// =============================================================================
+
+/*
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var psnpe: {{ model_name | default('MyModel') | replace('-','') | replace('_','') | capitalize }}PsnpeInference
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val nativeLibPath = applicationInfo.nativeLibraryDir
+        val configPath    = filesDir.absolutePath
+
+        psnpe = {{ model_name | default('MyModel') | replace('-','') | replace('_','') | capitalize }}PsnpeInference(
+            context       = this,
+            nativeLibPath = nativeLibPath,
+            configPath    = configPath
+        )
+        psnpe.initialize()
+
+        {% if execution_mode | default('sync') == 'sync' %}
+        // Sync inference
+        CoroutineScope(Dispatchers.IO).launch {
+            val input  = psnpe.loadRawFile("$filesDir/sample.raw")
+            val output = psnpe.runSyncSingle(input)
+            Log.i("Demo", "Output size: ${output?.size}")
+        }
+        {% elif execution_mode | default('sync') == 'outputAsync' %}
+        // Output-async inference
+        CoroutineScope(Dispatchers.IO).launch {
+            val inputs = listOf(psnpe.loadRawFile("$filesDir/sample.raw"))
+            val results = psnpe.runOutputAsyncSuspend(inputs)
+            Log.i("Demo", "Got ${results.size} results")
+        }
+        {% else %}
+        // Input-output async inference
+        val fileList = psnpe.readInputList("$filesDir/input_list.txt").flatten()
+        psnpe.registerIOAsyncInputCallback { instanceIdx, bufferIdx ->
+            // Provide input data for the requested instance
+            val idx = instanceIdx * {{ bulk_size | default(4) }} + bufferIdx
+            if (idx < fileList.size) psnpe.loadRawFile(fileList[idx]) else FloatArray(0)
+        }
+        psnpe.runInputOutputAsync(fileList)
+        {% endif %}
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        psnpe.release()
+    }
+}
+*/

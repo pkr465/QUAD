@@ -1,0 +1,67 @@
+plugins {
+    id("com.android.library")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "{{ package_name | default('com.qualcomm.quad.inference') }}"
+    compileSdk = {{ compile_sdk | default(34) }}
+
+    defaultConfig {
+        minSdk = {{ min_sdk | default(28) }}
+        targetSdk = {{ target_sdk | default(34) }}
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+
+    // Handle duplicate native libraries from SNPE AAR
+    packagingOptions {
+        pickFirst("lib/arm64-v8a/libc++_shared.so")
+        pickFirst("lib/arm64-v8a/libSNPE.so")
+{% if hexagon_version | default('73') %}
+        pickFirst("lib/arm64-v8a/libSnpeHtpV{{ hexagon_version | default('73') }}Skel.so")
+        pickFirst("lib/arm64-v8a/libSnpeHtpV{{ hexagon_version | default('73') }}Stub.so")
+{% endif %}
+        pickFirst("lib/arm64-v8a/libSnpeHtpPrepare.so")
+    }
+}
+
+// Repository for local AAR files
+repositories {
+    flatDir {
+        dirs("libs")
+    }
+}
+
+dependencies {
+    // SNPE SDK (place snpe-release.aar in app/libs/)
+    implementation(name = "snpe-release", ext = "aar")
+
+{% if use_platform_validator | default(false) %}
+    // Platform Validator (optional — place platformvalidator-release.aar in app/libs/)
+    implementation(name = "platformvalidator-release", ext = "aar")
+{% endif %}
+
+    // AndroidX
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.appcompat:appcompat:1.6.1")
+
+    // Testing
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+}

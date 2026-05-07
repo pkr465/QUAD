@@ -1,0 +1,15 @@
+{
+  "chipset": "Snapdragon 8 Elite SM8750",
+  "platform": "android",
+  "cpu_cores": 8,
+  "cpu_arch": "Oryon ARM64",
+  "cpu_freq_ghz": 4.32,
+  "gpu_model": "Adreno 830",
+  "gpu_tflops": 5.0,
+  "npu_model": "Hexagon NPU (HTP)",
+  "npu_tops": 48.0,
+  "ram_gb": 16.0,
+  "sdk_path": "/data/local/tmp/snpe",
+  "sdk_version": "2.28.0",
+  "available_runtimes": ["cpu", "gpu", "npu"]
+}

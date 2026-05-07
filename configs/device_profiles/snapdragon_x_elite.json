@@ -1,0 +1,15 @@
+{
+  "chipset": "Snapdragon X Elite X1E-80-100",
+  "platform": "windows",
+  "cpu_cores": 12,
+  "cpu_arch": "Oryon ARM64",
+  "cpu_freq_ghz": 3.8,
+  "gpu_model": "Adreno X1-85",
+  "gpu_tflops": 4.6,
+  "npu_model": "Hexagon NPU",
+  "npu_tops": 45.0,
+  "ram_gb": 32.0,
+  "sdk_path": "C:/Qualcomm/AIStack/QNN",
+  "sdk_version": "2.28.0",
+  "available_runtimes": ["cpu", "gpu", "npu"]
+}

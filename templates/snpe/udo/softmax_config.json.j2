@@ -1,0 +1,30 @@
+{
+  "UDO_PACKAGE_NAME": "{{ package_name | default('SoftmaxUdoPackage') }}",
+  "UDO_PACKAGE_VERSION": "1.0.0",
+  "UDO_OPS": [
+    {
+      "UDO_OP_NAME": "{{ op_name | default('Softmax') }}",
+
+      "UDO_PARAM_TYPES": [],
+
+      "UDO_INPUT_TENSORS": [
+        {
+          "name": "input",
+          "dtype": "FLOAT_32",
+          "layout": "NHWC",
+          "static": false
+        }
+      ],
+
+      "UDO_OUTPUT_TENSORS": [
+        {
+          "name": "output",
+          "dtype": "FLOAT_32",
+          "layout": "NHWC"
+        }
+      ],
+
+      "UDO_CORE_TYPES": {{ supported_runtimes | default(['CPU', 'GPU', 'DSP_V68']) | tojson }}
+    }
+  ]
+}

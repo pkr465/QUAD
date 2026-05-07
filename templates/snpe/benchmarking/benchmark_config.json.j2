@@ -1,0 +1,21 @@
+{
+  "Name": "{{ name }}",
+  "HostRootPath": "{{ host_root_path }}",
+  "HostResultsDir": "{{ host_results_dir }}",
+  "DevicePath": "{{ device_path | default('/data/local/tmp/snpebm') }}",
+  "Devices": {{ devices | tojson }},
+  "Runs": {{ runs | default(2) }},
+
+  "Model": {
+      "Name": "{{ model_name }}",
+      "Dlc": "{{ dlc_path }}",
+      "InputList": "{{ input_list_path }}",
+      "Data": {{ data_dirs | tojson }}
+  },
+
+  "Runtimes": {{ runtimes | tojson }},
+  "Measurements": {{ measurements | default(['timing']) | tojson }},
+  {% if cpu_fallback %}"CpuFallback": true,{% endif %}
+  {% if buffer_types %}"BufferTypes": {{ buffer_types | tojson }},{% endif %}
+  "ProfilingLevel": "{{ profiling_level | default('detailed') }}"
+}

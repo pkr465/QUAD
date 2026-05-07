@@ -1,0 +1,510 @@
+// =============================================================================
+// PSNPE C API Application Template
+// Generated for model: {{ model_name | default('model') }}
+// Execution mode: {{ execution_mode | default('sync') }}
+// Runtime: {{ runtime | default('dsp') | upper }}
+// Instances: {{ num_instances | default(4) }}
+// Batch size: {{ batch_size | default(1) }}
+// =============================================================================
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+#include "PSNPE/PSNPE.h"
+#include "PSNPE/BuildConfig.h"
+#include "PSNPE/RuntimeConfig.h"
+#include "PSNPE/UserBufferList.h"
+#include "DlContainer/IDlContainer.h"
+#include "DlSystem/IUserBuffer.h"
+#include "DlSystem/UserBufferMap.h"
+#include "DlSystem/StringList.h"
+#include "DlSystem/RuntimeList.h"
+#include "DlSystem/TensorShape.h"
+#include "DlSystem/SNPE_Error.h"
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+#define NUM_INSTANCES  {{ num_instances | default(4) }}
+#define BATCH_SIZE     {{ batch_size | default(1) }}
+#define OUTPUT_DIR     "{{ output_dir | default('./output') }}"
+#define MODEL_PATH     "{{ model_path | default('model.dlc') }}"
+
+// ---------------------------------------------------------------------------
+// Helper: read raw binary file
+// ---------------------------------------------------------------------------
+static size_t readRawFile(const char *path, void **outBuf) {
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "[ERROR] Cannot open: %s\n", path); return 0; }
+    fseek(f, 0, SEEK_END);
+    size_t sz = (size_t)ftell(f);
+    fseek(f, 0, SEEK_SET);
+    *outBuf = malloc(sz);
+    if (!*outBuf) { fclose(f); return 0; }
+    fread(*outBuf, 1, sz, f);
+    fclose(f);
+    return sz;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: read lines from a text file
+// ---------------------------------------------------------------------------
+static int readLines(const char *path, char **lines, int maxLines) {
+    FILE *f = fopen(path, "r");
+    if (!f) { fprintf(stderr, "[ERROR] Cannot open: %s\n", path); return 0; }
+    int count = 0;
+    char buf[4096];
+    while (fgets(buf, sizeof(buf), f) && count < maxLines) {
+        size_t len = strlen(buf);
+        while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) buf[--len] = '\0';
+        if (len > 0) { lines[count] = strdup(buf); count++; }
+    }
+    fclose(f);
+    return count;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: save raw buffer to file
+// ---------------------------------------------------------------------------
+static void saveRaw(const char *outDir, int resultIdx, const char *tensorName,
+                    const void *buf, size_t bytes) {
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/Result_%d", outDir, resultIdx);
+    char mkCmd[1100];
+    snprintf(mkCmd, sizeof(mkCmd), "mkdir -p %s", path);
+    (void)system(mkCmd);
+
+    char filePath[2048];
+    snprintf(filePath, sizeof(filePath), "%s/%s.raw", path, tensorName);
+    FILE *f = fopen(filePath, "wb");
+    if (!f) { fprintf(stderr, "[ERROR] Cannot write: %s\n", filePath); return; }
+    fwrite(buf, 1, bytes, f);
+    fclose(f);
+    printf("[INFO] Saved: %s\n", filePath);
+}
+
+// ===========================================================================
+// Callback: Output-async mode
+// ===========================================================================
+static void OCallback(Snpe_PSNPE_OutputAsyncCallbackParam_Handle_t paramHandle) {
+    uint32_t instanceIdx = Snpe_PSNPE_OutputAsyncCallbackParam_GetInstanceIndex(paramHandle);
+    printf("[OCallback] Output ready for instance %u\n", instanceIdx);
+
+    Snpe_UserBufferMap_Handle_t outputMapHandle =
+        Snpe_PSNPE_OutputAsyncCallbackParam_GetOutputMap(paramHandle);
+
+    Snpe_StringList_Handle_t nameList = Snpe_UserBufferMap_GetUserBufferNames(outputMapHandle);
+    size_t numOutputs = Snpe_StringList_Size(nameList);
+
+    for (size_t i = 0; i < numOutputs; ++i) {
+        const char *name = Snpe_StringList_At(nameList, i);
+        Snpe_IUserBuffer_Handle_t ubHandle =
+            Snpe_UserBufferMap_GetUserBuffer_Ref(outputMapHandle, name);
+
+        size_t bytes = Snpe_IUserBuffer_GetSize(ubHandle);
+        const void *buf = Snpe_IUserBuffer_GetBuffer_Ref(ubHandle);
+
+        saveRaw(OUTPUT_DIR, (int)instanceIdx, name, buf, bytes);
+    }
+
+    Snpe_StringList_Delete(nameList);
+}
+
+// ===========================================================================
+// Callback: Input-output async mode
+// ===========================================================================
+static void IOCallback(Snpe_PSNPE_InputOutputAsyncCallbackParam_Handle_t paramHandle) {
+    uint32_t instanceIdx = Snpe_PSNPE_InputOutputAsyncCallbackParam_GetInstanceIndex(paramHandle);
+    uint32_t inputIdx    = Snpe_PSNPE_InputOutputAsyncCallbackParam_GetInputIndex(paramHandle);
+    printf("[IOCallback] instance=%u inputIdx=%u\n", instanceIdx, inputIdx);
+
+    // Process finished output
+    Snpe_UserBufferMap_Handle_t outputMapHandle =
+        Snpe_PSNPE_InputOutputAsyncCallbackParam_GetOutputMap(paramHandle);
+    if (outputMapHandle) {
+        Snpe_StringList_Handle_t nameList =
+            Snpe_UserBufferMap_GetUserBufferNames(outputMapHandle);
+        size_t numOutputs = Snpe_StringList_Size(nameList);
+        for (size_t i = 0; i < numOutputs; ++i) {
+            const char *name = Snpe_StringList_At(nameList, i);
+            Snpe_IUserBuffer_Handle_t ubHandle =
+                Snpe_UserBufferMap_GetUserBuffer_Ref(outputMapHandle, name);
+            size_t bytes = Snpe_IUserBuffer_GetSize(ubHandle);
+            const void *buf = Snpe_IUserBuffer_GetBuffer_Ref(ubHandle);
+            saveRaw(OUTPUT_DIR, (int)instanceIdx, name, buf, bytes);
+        }
+        Snpe_StringList_Delete(nameList);
+    }
+
+    // Provide next input via ApplicationBufferMap
+    Snpe_ApplicationBufferMap_Handle_t appInputMap =
+        Snpe_PSNPE_InputOutputAsyncCallbackParam_GetApplicationInputBufferMap(paramHandle);
+    if (appInputMap) {
+        // User fills in the next frame data here
+        // Example: Snpe_ApplicationBufferMap_SetUserBuffer(appInputMap, "input", data, sz);
+        (void)appInputMap;
+    }
+}
+
+// ===========================================================================
+// setupRuntimeConfigs — create RuntimeConfigList with NUM_INSTANCES entries
+// ===========================================================================
+static Snpe_RuntimeConfigList_Handle_t setupRuntimeConfigs(
+    const char *runtimeStr, int cpuFallback, int perfProfileVal)
+{
+    Snpe_RuntimeConfigList_Handle_t rcList = Snpe_RuntimeConfigList_Create();
+
+    for (int i = 0; i < NUM_INSTANCES; ++i) {
+        Snpe_RuntimeConfig_Handle_t rc = Snpe_RuntimeConfig_Create();
+
+        // Runtime
+        {% if runtime | default('dsp') | lower == 'dsp' %}
+        Snpe_RuntimeConfig_SetRuntime(rc, SNPE_RUNTIME_DSP);
+        {% elif runtime | default('dsp') | lower == 'gpu' %}
+        Snpe_RuntimeConfig_SetRuntime(rc, SNPE_RUNTIME_GPU);
+        {% elif runtime | default('dsp') | lower == 'aip' %}
+        Snpe_RuntimeConfig_SetRuntime(rc, SNPE_RUNTIME_AIP_FIXED_TF);
+        {% else %}
+        Snpe_RuntimeConfig_SetRuntime(rc, SNPE_RUNTIME_CPU);
+        {% endif %}
+
+        // Command-line override
+        if (runtimeStr) {
+            if      (strcmp(runtimeStr, "dsp") == 0) Snpe_RuntimeConfig_SetRuntime(rc, SNPE_RUNTIME_DSP);
+            else if (strcmp(runtimeStr, "gpu") == 0) Snpe_RuntimeConfig_SetRuntime(rc, SNPE_RUNTIME_GPU);
+            else if (strcmp(runtimeStr, "aip") == 0) Snpe_RuntimeConfig_SetRuntime(rc, SNPE_RUNTIME_AIP_FIXED_TF);
+            else                                       Snpe_RuntimeConfig_SetRuntime(rc, SNPE_RUNTIME_CPU);
+        }
+
+        Snpe_RuntimeConfig_SetEnableCPUFallback(rc, cpuFallback);
+        Snpe_RuntimeConfig_SetPerformanceProfile(rc, (Snpe_PerformanceProfile_t)perfProfileVal);
+
+        Snpe_RuntimeConfigList_PushBack(rcList, rc);
+        Snpe_RuntimeConfig_Delete(rc);
+    }
+
+    return rcList;
+}
+
+// ===========================================================================
+// setupBuildConfig — assemble BuildConfig handle
+// ===========================================================================
+static Snpe_BuildConfig_Handle_t setupBuildConfig(
+    Snpe_RuntimeConfigList_Handle_t runtimeConfigs,
+    Snpe_DlContainer_Handle_t       container,
+    const char                     *modeStr)
+{
+    Snpe_BuildConfig_Handle_t bc = Snpe_BuildConfig_Create();
+
+    Snpe_BuildConfig_SetContainer(bc, container);
+    Snpe_BuildConfig_SetRuntimeConfigList(bc, runtimeConfigs);
+    Snpe_BuildConfig_SetOutputBufferCount(bc, 2);
+
+    // Execution mode
+    {% if execution_mode | default('sync') == 'outputAsync' %}
+    Snpe_BuildConfig_SetExecutionMode(bc, SNPE_PSNPE_EXECUTION_MODE_OUTPUT_ASYNC);
+    Snpe_BuildConfig_SetOutputCallback(bc, OCallback);
+    {% elif execution_mode | default('sync') == 'inputOutputAsync' %}
+    Snpe_BuildConfig_SetExecutionMode(bc, SNPE_PSNPE_EXECUTION_MODE_INPUT_OUTPUT_ASYNC);
+    Snpe_BuildConfig_SetInputOutputCallback(bc, IOCallback);
+    {% else %}
+    Snpe_BuildConfig_SetExecutionMode(bc, SNPE_PSNPE_EXECUTION_MODE_SYNC);
+    {% endif %}
+
+    // Command-line override
+    if (modeStr) {
+        if (strcmp(modeStr, "outputAsync") == 0) {
+            Snpe_BuildConfig_SetExecutionMode(bc, SNPE_PSNPE_EXECUTION_MODE_OUTPUT_ASYNC);
+            Snpe_BuildConfig_SetOutputCallback(bc, OCallback);
+        } else if (strcmp(modeStr, "inputOutputAsync") == 0) {
+            Snpe_BuildConfig_SetExecutionMode(bc, SNPE_PSNPE_EXECUTION_MODE_INPUT_OUTPUT_ASYNC);
+            Snpe_BuildConfig_SetInputOutputCallback(bc, IOCallback);
+        } else {
+            Snpe_BuildConfig_SetExecutionMode(bc, SNPE_PSNPE_EXECUTION_MODE_SYNC);
+        }
+    }
+
+    return bc;
+}
+
+// ===========================================================================
+// createUserBuffers — allocate UserBufferList handles
+// ===========================================================================
+static void createUserBuffers(
+    Snpe_PSNPE_Handle_t         psnpeHandle,
+    Snpe_UserBufferList_Handle_t inputBufList,
+    Snpe_UserBufferList_Handle_t outputBufList)
+{
+    Snpe_StringList_Handle_t inputNames  = Snpe_PSNPE_GetInputTensorNames(psnpeHandle);
+    Snpe_StringList_Handle_t outputNames = Snpe_PSNPE_GetOutputTensorNames(psnpeHandle);
+
+    size_t numInputs  = Snpe_StringList_Size(inputNames);
+    size_t numOutputs = Snpe_StringList_Size(outputNames);
+
+    for (int inst = 0; inst < NUM_INSTANCES; ++inst) {
+        // Create per-instance UserBufferMap for inputs
+        Snpe_UserBufferMap_Handle_t inMap  = Snpe_UserBufferMap_Create();
+        Snpe_UserBufferMap_Handle_t outMap = Snpe_UserBufferMap_Create();
+
+        for (size_t i = 0; i < numInputs; ++i) {
+            const char *name = Snpe_StringList_At(inputNames, i);
+            Snpe_TensorShape_Handle_t shapeHandle =
+                Snpe_PSNPE_GetInputDimensions(psnpeHandle, name);
+            size_t rank     = Snpe_TensorShape_Rank(shapeHandle);
+            size_t elements = 1;
+            for (size_t d = 0; d < rank; ++d)
+                elements *= Snpe_TensorShape_At(shapeHandle, d);
+
+            size_t bytes = elements * sizeof(float);
+            void  *buf   = calloc(1, bytes);
+
+            size_t *strides = (size_t *)malloc(rank * sizeof(size_t));
+            strides[rank - 1] = sizeof(float);
+            for (int d = (int)rank - 2; d >= 0; --d)
+                strides[d] = strides[d + 1] * Snpe_TensorShape_At(shapeHandle, d + 1);
+
+            Snpe_UserBufferEncoding_FloatN_Handle_t enc =
+                Snpe_UserBufferEncoding_FloatN_Create(32);
+            Snpe_IUserBuffer_Handle_t ubHandle =
+                Snpe_Util_CreateUserBuffer(buf, bytes, strides, rank, enc);
+            Snpe_UserBufferMap_Add(inMap, name, ubHandle);
+
+            Snpe_UserBufferEncoding_FloatN_Delete(enc);
+            Snpe_TensorShape_Delete(shapeHandle);
+            free(strides);
+        }
+
+        for (size_t i = 0; i < numOutputs; ++i) {
+            const char *name = Snpe_StringList_At(outputNames, i);
+            Snpe_TensorShape_Handle_t shapeHandle =
+                Snpe_PSNPE_GetOutputDimensions(psnpeHandle, name);
+            size_t rank     = Snpe_TensorShape_Rank(shapeHandle);
+            size_t elements = 1;
+            for (size_t d = 0; d < rank; ++d)
+                elements *= Snpe_TensorShape_At(shapeHandle, d);
+
+            {% if 'tf8' in (execution_mode | default('sync') | lower) or runtime | default('dsp') | lower == 'dsp' %}
+            size_t bytes = elements * sizeof(uint8_t);
+            void  *buf   = calloc(1, bytes);
+            size_t *strides = (size_t *)malloc(rank * sizeof(size_t));
+            strides[rank - 1] = 1;
+            for (int d = (int)rank - 2; d >= 0; --d)
+                strides[d] = strides[d + 1] * Snpe_TensorShape_At(shapeHandle, d + 1);
+            Snpe_UserBufferEncoding_TF8_Handle_t enc =
+                Snpe_UserBufferEncoding_TF8_Create(0, 1.0f / 255.0f);
+            Snpe_IUserBuffer_Handle_t ubHandle =
+                Snpe_Util_CreateUserBuffer(buf, bytes, strides, rank, enc);
+            Snpe_UserBufferEncoding_TF8_Delete(enc);
+            {% else %}
+            size_t bytes = elements * sizeof(float);
+            void  *buf   = calloc(1, bytes);
+            size_t *strides = (size_t *)malloc(rank * sizeof(size_t));
+            strides[rank - 1] = sizeof(float);
+            for (int d = (int)rank - 2; d >= 0; --d)
+                strides[d] = strides[d + 1] * Snpe_TensorShape_At(shapeHandle, d + 1);
+            Snpe_UserBufferEncoding_FloatN_Handle_t enc =
+                Snpe_UserBufferEncoding_FloatN_Create(32);
+            Snpe_IUserBuffer_Handle_t ubHandle =
+                Snpe_Util_CreateUserBuffer(buf, bytes, strides, rank, enc);
+            Snpe_UserBufferEncoding_FloatN_Delete(enc);
+            {% endif %}
+
+            Snpe_UserBufferMap_Add(outMap, name, ubHandle);
+            Snpe_TensorShape_Delete(shapeHandle);
+            free(strides);
+        }
+
+        Snpe_UserBufferList_PushBack(inputBufList,  inMap);
+        Snpe_UserBufferList_PushBack(outputBufList, outMap);
+        Snpe_UserBufferMap_Delete(inMap);
+        Snpe_UserBufferMap_Delete(outMap);
+    }
+
+    Snpe_StringList_Delete(inputNames);
+    Snpe_StringList_Delete(outputNames);
+}
+
+// ===========================================================================
+// loadInputs — copy raw file data into input UserBufferList
+// ===========================================================================
+static void loadInputs(
+    Snpe_PSNPE_Handle_t          psnpeHandle,
+    Snpe_UserBufferList_Handle_t inputBufList,
+    char                       **inputFiles,
+    int                          numFiles)
+{
+    Snpe_StringList_Handle_t inputNames = Snpe_PSNPE_GetInputTensorNames(psnpeHandle);
+    size_t numInputNames = Snpe_StringList_Size(inputNames);
+
+    for (int inst = 0; inst < NUM_INSTANCES && inst < numFiles; ++inst) {
+        Snpe_UserBufferMap_Handle_t inMap =
+            Snpe_UserBufferList_At_Ref(inputBufList, (size_t)inst);
+
+        // inputFiles[inst] may be colon-separated for multi-input models
+        char *fileCopy = strdup(inputFiles[inst]);
+        char *token    = strtok(fileCopy, ":");
+        for (size_t i = 0; i < numInputNames; ++i) {
+            const char *name = Snpe_StringList_At(inputNames, i);
+            const char *filePath = token ? token : inputFiles[inst];
+
+            void  *rawBuf = NULL;
+            size_t rawSz  = readRawFile(filePath, &rawBuf);
+            if (rawSz == 0) { if (token) token = strtok(NULL, ":"); continue; }
+
+            Snpe_IUserBuffer_Handle_t ubHandle =
+                Snpe_UserBufferMap_GetUserBuffer_Ref(inMap, name);
+            if (ubHandle) {
+                void *ubBuf   = Snpe_IUserBuffer_GetBuffer(ubHandle);
+                size_t ubSize = Snpe_IUserBuffer_GetSize(ubHandle);
+                memcpy(ubBuf, rawBuf, rawSz < ubSize ? rawSz : ubSize);
+            }
+            free(rawBuf);
+            if (token) token = strtok(NULL, ":");
+        }
+        free(fileCopy);
+    }
+
+    Snpe_StringList_Delete(inputNames);
+}
+
+// ===========================================================================
+// main
+// ===========================================================================
+int main(int argc, char **argv) {
+    // ---- Parse arguments ---------------------------------------------------
+    const char *containerPath = MODEL_PATH;
+    const char *inputListPath = NULL;
+    const char *outputDir     = OUTPUT_DIR;
+    const char *runtimeStr    = "{{ runtime | default('dsp') }}";
+    const char *modeStr       = "{{ execution_mode | default('sync') }}";
+    const char *perfStr       = "burst";
+    int         cpuFallback   = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if      (!strcmp(argv[i], "--container")    && i+1<argc) containerPath = argv[++i];
+        else if (!strcmp(argv[i], "--input_list")   && i+1<argc) inputListPath = argv[++i];
+        else if (!strcmp(argv[i], "--output_dir")   && i+1<argc) outputDir     = argv[++i];
+        else if (!strcmp(argv[i], "--runtime_mode") && i+1<argc) modeStr       = argv[++i];
+        else if (!strcmp(argv[i], "--use_dsp"))  runtimeStr = "dsp";
+        else if (!strcmp(argv[i], "--use_cpu"))  runtimeStr = "cpu";
+        else if (!strcmp(argv[i], "--use_gpu"))  runtimeStr = "gpu";
+        else if (!strcmp(argv[i], "--perf_profile") && i+1<argc) perfStr       = argv[++i];
+        else if (!strcmp(argv[i], "--cpu_fallback")) cpuFallback = 1;
+    }
+
+    // ---- Performance profile -----------------------------------------------
+    int perfProfileVal = SNPE_PERFORMANCE_PROFILE_BURST;
+    if      (!strcmp(perfStr, "high_performance")) perfProfileVal = SNPE_PERFORMANCE_PROFILE_HIGH_PERFORMANCE;
+    else if (!strcmp(perfStr, "balanced"))          perfProfileVal = SNPE_PERFORMANCE_PROFILE_BALANCED;
+    else if (!strcmp(perfStr, "power_saver"))       perfProfileVal = SNPE_PERFORMANCE_PROFILE_POWER_SAVER;
+
+    // ---- Load container ----------------------------------------------------
+    Snpe_DlContainer_Handle_t containerHandle = Snpe_DlContainer_Open(containerPath);
+    if (!containerHandle) {
+        fprintf(stderr, "[ERROR] Failed to open container: %s\n", containerPath);
+        return 1;
+    }
+
+    // ---- Build PSNPE -------------------------------------------------------
+    Snpe_RuntimeConfigList_Handle_t rcList =
+        setupRuntimeConfigs(runtimeStr, cpuFallback, perfProfileVal);
+
+    Snpe_BuildConfig_Handle_t bcHandle =
+        setupBuildConfig(rcList, containerHandle, modeStr);
+
+    Snpe_PSNPE_Handle_t psnpeHandle = Snpe_PSNPE_Build(NULL, bcHandle);
+    if (!psnpeHandle) {
+        fprintf(stderr, "[ERROR] Failed to build PSNPE.\n");
+        Snpe_BuildConfig_Delete(bcHandle);
+        Snpe_RuntimeConfigList_Delete(rcList);
+        Snpe_DlContainer_Delete(containerHandle);
+        return 1;
+    }
+
+    // ---- Allocate user buffer lists ----------------------------------------
+    Snpe_UserBufferList_Handle_t inputBufList  =
+        Snpe_UserBufferList_CreateSize((size_t)NUM_INSTANCES);
+    Snpe_UserBufferList_Handle_t outputBufList =
+        Snpe_UserBufferList_CreateSize((size_t)NUM_INSTANCES);
+
+    createUserBuffers(psnpeHandle, inputBufList, outputBufList);
+
+    // ---- Read input list ---------------------------------------------------
+    char *inputFiles[8192];
+    int numFiles = 0;
+    if (inputListPath)
+        numFiles = readLines(inputListPath, inputFiles, 8192);
+    if (numFiles == 0) {
+        fprintf(stderr, "[ERROR] No input files in: %s\n",
+                inputListPath ? inputListPath : "(none)");
+        goto cleanup;
+    }
+
+    // ---- Run inference -----------------------------------------------------
+    {
+        char mkCmd[512];
+        snprintf(mkCmd, sizeof(mkCmd), "mkdir -p %s", outputDir);
+        (void)system(mkCmd);
+    }
+
+    {
+        int numBatches = numFiles / NUM_INSTANCES;
+        for (int batch = 0; batch < numBatches; ++batch) {
+            loadInputs(psnpeHandle, inputBufList,
+                       inputFiles + batch * NUM_INSTANCES, NUM_INSTANCES);
+
+            {% if execution_mode | default('sync') == 'sync' %}
+            // --- SYNC execute ---
+            if (Snpe_PSNPE_Execute(psnpeHandle, inputBufList, outputBufList)
+                    != SNPE_SUCCESS) {
+                fprintf(stderr, "[ERROR] PSNPE execute failed at batch %d\n", batch);
+                continue;
+            }
+            // Save outputs
+            for (int inst = 0; inst < NUM_INSTANCES; ++inst) {
+                Snpe_UserBufferMap_Handle_t outMap =
+                    Snpe_UserBufferList_At_Ref(outputBufList, (size_t)inst);
+                Snpe_StringList_Handle_t outNames =
+                    Snpe_UserBufferMap_GetUserBufferNames(outMap);
+                size_t numOut = Snpe_StringList_Size(outNames);
+                for (size_t o = 0; o < numOut; ++o) {
+                    const char *name = Snpe_StringList_At(outNames, o);
+                    Snpe_IUserBuffer_Handle_t ubHandle =
+                        Snpe_UserBufferMap_GetUserBuffer_Ref(outMap, name);
+                    saveRaw(outputDir,
+                            batch * NUM_INSTANCES + inst, name,
+                            Snpe_IUserBuffer_GetBuffer_Ref(ubHandle),
+                            Snpe_IUserBuffer_GetSize(ubHandle));
+                }
+                Snpe_StringList_Delete(outNames);
+            }
+            {% elif execution_mode | default('sync') == 'outputAsync' %}
+            // --- OUTPUT ASYNC execute --- results delivered via OCallback
+            if (Snpe_PSNPE_ExecuteOutputAsync(psnpeHandle, inputBufList)
+                    != SNPE_SUCCESS) {
+                fprintf(stderr, "[ERROR] PSNPE executeOutputAsync failed at batch %d\n", batch);
+            }
+            {% else %}
+            // --- INPUT OUTPUT ASYNC execute ---
+            if (Snpe_PSNPE_ExecuteInputOutputAsync(psnpeHandle)
+                    != SNPE_SUCCESS) {
+                fprintf(stderr, "[ERROR] PSNPE executeInputOutputAsync failed at batch %d\n", batch);
+            }
+            {% endif %}
+        }
+    }
+
+    printf("[INFO] Done. Results in: %s\n", outputDir);
+
+cleanup:
+    for (int i = 0; i < numFiles; ++i) free(inputFiles[i]);
+    Snpe_UserBufferList_Delete(inputBufList);
+    Snpe_UserBufferList_Delete(outputBufList);
+    Snpe_PSNPE_Delete(psnpeHandle);
+    Snpe_BuildConfig_Delete(bcHandle);
+    Snpe_RuntimeConfigList_Delete(rcList);
+    Snpe_DlContainer_Delete(containerHandle);
+    return 0;
+}

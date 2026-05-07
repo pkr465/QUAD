@@ -1,0 +1,15 @@
+{
+  "chipset": "QCS2210 (Qualcomm Robotics RB1)",
+  "platform": "linux",
+  "cpu_cores": 4,
+  "cpu_arch": "Kryo ARM64",
+  "cpu_freq_ghz": 2.0,
+  "gpu_model": "Adreno 504",
+  "gpu_tflops": 0.4,
+  "npu_model": "Hexagon DSP V66",
+  "npu_tops": 1.0,
+  "ram_gb": 2.0,
+  "sdk_path": "/opt/snpe-2.x",
+  "sdk_version": "2.22.0",
+  "available_runtimes": ["cpu", "gpu", "npu"]
+}

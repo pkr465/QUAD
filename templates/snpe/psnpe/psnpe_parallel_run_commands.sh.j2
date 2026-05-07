@@ -1,0 +1,182 @@
+#!/bin/bash
+# =============================================================================
+# PSNPE Parallel-Run Deployment Script
+# Generated for model : {{ model_name | default('MyModel') }}
+# DLC path            : {{ model_path | default('model.dlc') }}
+# Execution mode      : {{ execution_mode | default('sync') }}
+# Runtime             : {{ runtime | default('dsp') }}
+# Instances / bulk    : {{ num_instances | default(4) }}
+# DSP architecture    : {{ dsp_arch | default('v73') }}
+# =============================================================================
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Configurable variables (override via environment or command-line)
+# ---------------------------------------------------------------------------
+MODEL_NAME="{{ model_name | default('MyModel') }}"
+MODEL_PATH="{{ model_path | default('model.dlc') }}"
+EXEC_MODE="{{ execution_mode | default('sync') }}"
+RUNTIME="{{ runtime | default('dsp') }}"
+NUM_INSTANCES="{{ num_instances | default(4) }}"
+DSP_ARCH="{{ dsp_arch | default('v73') }}"
+PERF_PROFILE="{{ perf_profile | default('burst') }}"
+DEVICE_BASE="/data/local/tmp/${MODEL_NAME}"
+INPUT_LIST_HOST="{{ input_list | default('target_raw_list.txt') }}"
+OUTPUT_DIR_HOST="{{ output_dir | default('./output') }}"
+OUTPUT_DIR_DEVICE="${DEVICE_BASE}/output"
+
+# Read extra flags from environment
+ADB="${ADB:-adb}"
+SNPE_ROOT="${SNPE_ROOT:?'SNPE_ROOT is not set'}"
+
+# ---------------------------------------------------------------------------
+# Helper utilities
+# ---------------------------------------------------------------------------
+log()  { echo "[$(date '+%H:%M:%S')] $*"; }
+die()  { echo "[ERROR] $*" >&2; exit 1; }
+
+check_device() {
+    ${ADB} get-state 1>/dev/null 2>&1 || die "No ADB device found. Check USB connection."
+    log "ADB device: $(${ADB} get-serialno 2>/dev/null || echo 'unknown')"
+}
+
+# ---------------------------------------------------------------------------
+# 1. Push model DLC
+# ---------------------------------------------------------------------------
+push_model() {
+    log "Creating device directory: ${DEVICE_BASE}"
+    ${ADB} shell "mkdir -p ${DEVICE_BASE}"
+
+    log "Pushing model: ${MODEL_PATH} → ${DEVICE_BASE}/"
+    ${ADB} push "${MODEL_PATH}" "${DEVICE_BASE}/${MODEL_NAME}.dlc"
+}
+
+# ---------------------------------------------------------------------------
+# 2. Push snpe-parallel-run binary
+# ---------------------------------------------------------------------------
+push_binary() {
+    local bin_src="${SNPE_ROOT}/bin/aarch64-android/snpe-parallel-run"
+    [[ -f "${bin_src}" ]] || die "Binary not found: ${bin_src}"
+    log "Pushing binary: ${bin_src}"
+    ${ADB} push "${bin_src}" "${DEVICE_BASE}/snpe-parallel-run"
+    ${ADB} shell "chmod +x ${DEVICE_BASE}/snpe-parallel-run"
+}
+
+# ---------------------------------------------------------------------------
+# 3. Push SNPE shared libraries
+# ---------------------------------------------------------------------------
+push_libraries() {
+    local lib_dir="${SNPE_ROOT}/lib/aarch64-android"
+    [[ -d "${lib_dir}" ]] || die "Library directory not found: ${lib_dir}"
+    log "Pushing SNPE libraries from ${lib_dir}"
+    ${ADB} push "${lib_dir}/." "${DEVICE_BASE}/lib/"
+
+    {% if runtime | default('dsp') | lower in ['dsp', 'aip'] %}
+    # DSP / HTP stub libraries
+    local dsp_lib_dir="${SNPE_ROOT}/lib/hexagon-${DSP_ARCH}/unsigned"
+    if [[ -d "${dsp_lib_dir}" ]]; then
+        log "Pushing DSP libraries from ${dsp_lib_dir}"
+        ${ADB} push "${dsp_lib_dir}/." "${DEVICE_BASE}/lib/"
+    else
+        log "WARNING: DSP library dir not found: ${dsp_lib_dir}"
+    fi
+    {% endif %}
+}
+
+# ---------------------------------------------------------------------------
+# 4. Push input data and input list file
+# ---------------------------------------------------------------------------
+push_inputs() {
+    local input_dir="{{ input_dir | default('./inputs') }}"
+
+    if [[ -d "${input_dir}" ]]; then
+        log "Pushing input data from ${input_dir}"
+        ${ADB} shell "mkdir -p ${DEVICE_BASE}/inputs"
+        ${ADB} push "${input_dir}/." "${DEVICE_BASE}/inputs/"
+    fi
+
+    if [[ -f "${INPUT_LIST_HOST}" ]]; then
+        log "Pushing input list: ${INPUT_LIST_HOST}"
+        ${ADB} push "${INPUT_LIST_HOST}" "${DEVICE_BASE}/target_raw_list.txt"
+    else
+        log "WARNING: Input list not found locally: ${INPUT_LIST_HOST}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 5. Execute snpe-parallel-run on device
+# ---------------------------------------------------------------------------
+run_inference() {
+    log "Creating output directory on device: ${OUTPUT_DIR_DEVICE}"
+    ${ADB} shell "mkdir -p ${OUTPUT_DIR_DEVICE}"
+
+    log "Running snpe-parallel-run (mode=${EXEC_MODE}, runtime=${RUNTIME})"
+
+    ${ADB} shell "cd ${DEVICE_BASE} && \
+        export LD_LIBRARY_PATH=${DEVICE_BASE}/lib:\$LD_LIBRARY_PATH && \
+        export ADSP_LIBRARY_PATH='${DEVICE_BASE}/lib;/system/lib/rfsa/adsp;/system/vendor/lib/rfsa/adsp;/dsp' && \
+        ./snpe-parallel-run \
+            --container ${MODEL_NAME}.dlc \
+            --input_list target_raw_list.txt \
+            --output_dir output \
+            --runtime_mode ${EXEC_MODE} \
+            --use_${RUNTIME} \
+            --perf_profile ${PERF_PROFILE} \
+            {% if cpu_fallback | default(false) %}--cpu_fallback \
+            {% endif %}{% if num_instances | default(4) | int > 1 %}--num_instances ${NUM_INSTANCES} \
+            {% endif %}2>&1"
+
+    log "Inference complete."
+}
+
+# ---------------------------------------------------------------------------
+# 6. Pull results back to host
+# ---------------------------------------------------------------------------
+pull_results() {
+    log "Pulling results to host: ${OUTPUT_DIR_HOST}"
+    mkdir -p "${OUTPUT_DIR_HOST}"
+    ${ADB} pull "${OUTPUT_DIR_DEVICE}/." "${OUTPUT_DIR_HOST}/"
+    log "Results saved to: ${OUTPUT_DIR_HOST}"
+}
+
+# ---------------------------------------------------------------------------
+# 7. Clean up device (optional)
+# ---------------------------------------------------------------------------
+clean_device() {
+    log "Cleaning up device directory: ${DEVICE_BASE}"
+    ${ADB} shell "rm -rf ${DEVICE_BASE}"
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+main() {
+    local cmd="${1:-all}"
+
+    check_device
+
+    case "${cmd}" in
+        push_model)    push_model ;;
+        push_binary)   push_binary ;;
+        push_libraries)push_libraries ;;
+        push_inputs)   push_inputs ;;
+        run)           run_inference ;;
+        pull)          pull_results ;;
+        clean)         clean_device ;;
+        all)
+            push_model
+            push_binary
+            push_libraries
+            push_inputs
+            run_inference
+            pull_results
+            ;;
+        *)
+            echo "Usage: $0 [all|push_model|push_binary|push_libraries|push_inputs|run|pull|clean]"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

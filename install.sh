@@ -1,0 +1,472 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════════════
+# QUAD — Qualcomm Unified Agent for Developers
+# Global Installation Script (Orchestrator)
+#
+# Installs the QUAD platform and calls modular adapter setup scripts:
+#   scripts/adapters/setup_qairt.sh   — QAIRT/SNPE SDK (model conversion, inference)
+#   scripts/adapters/setup_qnn.sh     — QNN-specific configuration
+#   scripts/adapters/setup_hexagon.sh — Hexagon SDK (custom DSP kernels)
+#
+# Usage:
+#   ./install.sh                 # Full: platform + all available adapters
+#   ./install.sh --mock-only     # Platform only (no SDK setup)
+#   ./install.sh --adapters qairt,qnn  # Specific adapters only
+#   ./install.sh --skip-tests    # Skip verification
+#   ./install.sh --help          # Show options
+# ═══════════════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="$SCRIPT_DIR/.venv"
+PYTHON="${PYTHON:-python3}"
+ADAPTERS_DIR="${SCRIPT_DIR}/scripts/adapters"
+
+# Source helpers
+source "${SCRIPT_DIR}/scripts/helpers.sh"
+
+# ── Parse arguments ──
+MOCK_ONLY=false
+SKIP_TESTS=false
+ADAPTERS_LIST="qairt,qnn,hexagon,target,udo"  # Default: all
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --mock-only)    MOCK_ONLY=true; shift ;;
+        --skip-tests)   SKIP_TESTS=true; shift ;;
+        --adapters)     ADAPTERS_LIST="$2"; shift 2 ;;
+        --help|-h)
+            echo ""
+            echo -e "${BOLD}QUAD — Global Installation Script${NC}"
+            echo ""
+            echo "Usage: ./install.sh [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --mock-only          Platform only (no SDK adapters)"
+            echo "  --adapters LIST      Comma-separated adapter list (default: qairt,qnn,hexagon)"
+            echo "  --skip-tests         Skip test verification"
+            echo "  --help               Show this help"
+            echo ""
+            echo "Available adapters:"
+            echo "  qairt     QAIRT/SNPE SDK — model conversion, inference, profiling"
+            echo "  qnn       QNN-specific — context binary, QNN backends"
+            echo "  hexagon   Hexagon SDK — custom DSP kernel development"
+            echo ""
+            echo "Architecture:"
+            echo "  install.sh (orchestrator)"
+            echo "    ├── scripts/helpers.sh              (shared logging functions)"
+            echo "    └── scripts/adapters/"
+            echo "        ├── setup_qairt.sh             (QAIRT/SNPE)"
+            echo "        ├── setup_qnn.sh               (QNN)"
+            echo "        └── setup_hexagon.sh           (Hexagon DSP)"
+            echo ""
+            echo "Examples:"
+            echo "  ./install.sh                          # Full install"
+            echo "  ./install.sh --mock-only              # No SDK (mock mode)"
+            echo "  ./install.sh --adapters qairt         # Only QAIRT adapter"
+            echo "  ./install.sh --adapters qairt,hexagon # QAIRT + Hexagon"
+            echo ""
+            exit 0
+            ;;
+        *)  log_error "Unknown option: $1"; exit 1 ;;
+    esac
+done
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+echo -e "${BOLD}  QUAD — Qualcomm Unified Agent for Developers${NC}"
+echo -e "${BOLD}  Global Installer${NC}"
+echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+echo ""
+if [ "$MOCK_ONLY" = true ]; then
+    echo -e "  Mode: ${YELLOW}Mock only${NC} (no SDK adapters)"
+else
+    echo -e "  Mode: ${GREEN}Full install${NC} (platform + adapters: ${ADAPTERS_LIST})"
+fi
+echo ""
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 1: Python
+# ═══════════════════════════════════════════════════════════════════════════
+log_section "Step 1: Python Environment"
+
+PY_VERSION=$($PYTHON --version 2>&1 | cut -d' ' -f2)
+PY_MAJOR=$(echo "$PY_VERSION" | cut -d. -f1)
+PY_MINOR=$(echo "$PY_VERSION" | cut -d. -f2)
+
+if [ "$PY_MAJOR" -lt 3 ] || ([ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]); then
+    log_error "Python 3.10+ required (found $PY_VERSION)"
+    echo "    PYTHON=/path/to/python3.11 ./install.sh"
+    exit 1
+fi
+log_ok "Python $PY_VERSION"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 2: QUAD Platform Package
+# ═══════════════════════════════════════════════════════════════════════════
+log_section "Step 2: QUAD Platform"
+
+if [ -d "$VENV_DIR" ]; then
+    log_ok "Virtual environment exists (.venv/)"
+else
+    log_info "Creating virtual environment..."
+    $PYTHON -m venv "$VENV_DIR"
+    log_ok "Created .venv/"
+fi
+
+source "$VENV_DIR/bin/activate"
+pip install --upgrade pip --quiet 2>/dev/null
+pip install -e ".[dev]" --quiet 2>/dev/null
+log_ok "quad-agent + dev dependencies installed"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 3: Configuration
+# ═══════════════════════════════════════════════════════════════════════════
+log_section "Step 3: Configuration"
+
+if [ ! -f "$SCRIPT_DIR/quad.toml" ]; then
+    cp "$SCRIPT_DIR/configs/quad.toml.example" "$SCRIPT_DIR/quad.toml"
+    log_ok "Created quad.toml"
+else
+    log_ok "quad.toml exists"
+fi
+
+if [ -f "$SCRIPT_DIR/.claude/settings.json" ]; then
+    log_ok ".claude/settings.json (MCP auto-detection)"
+else
+    mkdir -p "$SCRIPT_DIR/.claude"
+    cat > "$SCRIPT_DIR/.claude/settings.json" << 'SETTINGS'
+{
+  "permissions": {
+    "allow": [
+      "mcp__quad__hardware_detect",
+      "mcp__quad__convert_model",
+      "mcp__quad__profile_workload",
+      "mcp__quad__orchestrate_workload",
+      "mcp__quad__generate_code"
+    ]
+  },
+  "mcpServers": {
+    "quad": {
+      "command": "python",
+      "args": ["-m", "quad.server.main"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "QUAD_ADAPTER_MODE": "mock"
+      }
+    }
+  }
+}
+SETTINGS
+    log_ok "Created .claude/settings.json"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 4: VS Code Setup
+# ═══════════════════════════════════════════════════════════════════════════
+log_section "Step 4: VS Code Setup"
+
+VSCODE_DIR="$SCRIPT_DIR/.vscode"
+mkdir -p "$VSCODE_DIR"
+
+# ── settings.json — Python interpreter, CMake, C++ include paths ──
+cat > "$VSCODE_DIR/settings.json" << VSCODE_SETTINGS
+{
+  "python.defaultInterpreterPath": "${VENV_DIR}/bin/python",
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests"],
+  "python.analysis.typeCheckingMode": "basic",
+  "editor.formatOnSave": true,
+  "[python]": { "editor.defaultFormatter": "charliermarsh.ruff" },
+  "ruff.lint.args": ["--config=pyproject.toml"],
+  "files.exclude": {
+    "**/__pycache__": true, ".venv": true, "**/*.egg-info": true, "qairt": true
+  },
+  "cmake.configureOnOpen": true,
+  "cmake.buildDirectory": "\${workspaceFolder}/build",
+  "C_Cpp.default.includePath": [
+    "${QAIRT_SDK_ROOT:-\${workspaceFolder}/qairt/2.45.0.260326}/include/SNPE",
+    "${QAIRT_SDK_ROOT:-\${workspaceFolder}/qairt/2.45.0.260326}/include/QNN"
+  ],
+  "terminal.integrated.env.linux": {
+    "QAIRT_SDK_ROOT": "${QAIRT_SDK_ROOT:-${SCRIPT_DIR}/qairt/2.45.0.260326}",
+    "SNPE_ROOT": "${QAIRT_SDK_ROOT:-${SCRIPT_DIR}/qairt/2.45.0.260326}",
+    "PATH": "${QAIRT_SDK_ROOT:-${SCRIPT_DIR}/qairt/2.45.0.260326}/bin/x86_64-linux-clang:\${env:PATH}"
+  },
+  "terminal.integrated.env.osx": {
+    "QAIRT_SDK_ROOT": "${QAIRT_SDK_ROOT:-${SCRIPT_DIR}/qairt/2.45.0.260326}",
+    "SNPE_ROOT": "${QAIRT_SDK_ROOT:-${SCRIPT_DIR}/qairt/2.45.0.260326}"
+  }
+}
+VSCODE_SETTINGS
+log_ok "settings.json — Python interpreter, SDK paths, CMake"
+
+# ── extensions.json — Recommended extensions prompt ──
+cat > "$VSCODE_DIR/extensions.json" << 'VSCODE_EXT'
+{
+  "recommendations": [
+    "ms-python.python",
+    "charliermarsh.ruff",
+    "ms-python.debugpy",
+    "ms-vscode.cpptools",
+    "ms-vscode.cmake-tools",
+    "ms-python.mypy-type-checker",
+    "redhat.vscode-yaml",
+    "tamasfe.even-better-toml"
+  ]
+}
+VSCODE_EXT
+log_ok "extensions.json — recommended extensions"
+
+# ── tasks.json — Build, test, serve, convert, deploy tasks ──
+cat > "$VSCODE_DIR/tasks.json" << 'VSCODE_TASKS'
+{
+  "version": "2.0.0",
+  "tasks": [
+    { "label": "QUAD: Run Tests",          "type": "shell", "command": "make test",               "group": {"kind": "test", "isDefault": true}, "problemMatcher": [] },
+    { "label": "QUAD: Start Server (Mock)","type": "shell", "command": "./launch.sh --verbose",   "isBackground": true, "problemMatcher": [] },
+    { "label": "QUAD: Start Server (Real)","type": "shell", "command": "./launch.sh --real",      "isBackground": true, "problemMatcher": [] },
+    { "label": "QUAD: Lint",               "type": "shell", "command": "make lint",               "group": "build",     "problemMatcher": [] },
+    { "label": "QUAD: Format",             "type": "shell", "command": "make format",             "problemMatcher": [] },
+    { "label": "QUAD: Quickstart",         "type": "shell", "command": "source .venv/bin/activate && python -m quad.cli.main quickstart", "problemMatcher": [] },
+    { "label": "QUAD: Doctor",             "type": "shell", "command": "source .venv/bin/activate && python -m quad.cli.main doctor",     "problemMatcher": [] },
+    { "label": "QUAD: Benchmark",          "type": "shell", "command": "source .venv/bin/activate && python -m quad.cli.main benchmark",  "problemMatcher": [] },
+    {
+      "label": "SNPE: Convert Model",
+      "type": "shell",
+      "command": "source ./activate.sh && qairt-converter --input_network ${input:modelPath}",
+      "problemMatcher": []
+    },
+    {
+      "label": "SNPE: Run Inference",
+      "type": "shell",
+      "command": "source ./activate.sh && snpe-net-run --container ${input:dlcPath} --input_list ${input:inputList} --output_dir ./output ${input:runtime}",
+      "problemMatcher": []
+    },
+    {
+      "label": "SNPE: Build C++ (CMake)",
+      "type": "shell",
+      "command": "source ./activate.sh && mkdir -p build && cd build && cmake .. && cmake --build . --config Release",
+      "group": "build",
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "Deploy: Model to Target",
+      "type": "shell",
+      "command": "./deploy.sh ${input:modelPath} --runtime ${input:runtime}",
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    { "id": "modelPath",  "type": "promptString",  "description": "Model file (.onnx or .dlc)", "default": "model.onnx" },
+    { "id": "dlcPath",    "type": "promptString",  "description": ".dlc file path",             "default": "model.dlc" },
+    { "id": "inputList",  "type": "promptString",  "description": "input_list.txt path",        "default": "input_list.txt" },
+    { "id": "runtime",    "type": "pickString",    "description": "Runtime",
+      "options": ["--use_cpu", "--use_gpu", "--use_dsp", "--use_aip"],
+      "default": "--use_cpu" }
+  ]
+}
+VSCODE_TASKS
+log_ok "tasks.json — QUAD, SNPE, build, deploy tasks"
+
+# ── launch.json — Debug configurations ──
+cat > "$VSCODE_DIR/launch.json" << 'VSCODE_LAUNCH'
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "QUAD: MCP Server (Mock)",
+      "type": "debugpy", "request": "launch",
+      "module": "quad.server.main",
+      "env": { "QUAD_ADAPTER_MODE": "mock" },
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "QUAD: MCP Server (Real)",
+      "type": "debugpy", "request": "launch",
+      "module": "quad.server.main",
+      "env": { "QUAD_ADAPTER_MODE": "real" },
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "QUAD: Run Tests",
+      "type": "debugpy", "request": "launch",
+      "module": "pytest",
+      "args": ["tests/", "-v", "--tb=short"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "QUAD: Quickstart",
+      "type": "debugpy", "request": "launch",
+      "module": "quad.cli.main",
+      "args": ["quickstart"],
+      "console": "integratedTerminal"
+    }
+  ]
+}
+VSCODE_LAUNCH
+log_ok "launch.json — debug configurations (Mock, Real, Tests, Quickstart)"
+
+# ── Install recommended extensions if code CLI is available ──
+if command -v code &> /dev/null; then
+    log_info "Installing recommended VS Code extensions..."
+    EXTENSIONS=(
+        "ms-python.python"
+        "charliermarsh.ruff"
+        "ms-python.debugpy"
+        "ms-vscode.cpptools"
+        "ms-vscode.cmake-tools"
+    )
+    for ext in "${EXTENSIONS[@]}"; do
+        code --install-extension "$ext" --force &>/dev/null && log_ok "$ext" || log_warn "$ext (failed, install manually)"
+    done
+else
+    log_warn "VS Code CLI (code) not found — install extensions manually"
+    log_info "Recommended: ms-python.python, charliermarsh.ruff, ms-vscode.cpptools, ms-vscode.cmake-tools"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 5: SDK Adapters (Modular)
+# ═══════════════════════════════════════════════════════════════════════════
+if [ "$MOCK_ONLY" = true ]; then
+    log_section "Step 5: SDK Adapters (Skipped — mock-only)"
+    log_info "All tools will use simulated responses."
+else
+    log_section "Step 5: SDK Adapters"
+
+    IFS=',' read -ra ADAPTERS <<< "$ADAPTERS_LIST"
+    ADAPTERS_INSTALLED=0
+
+    for adapter in "${ADAPTERS[@]}"; do
+        adapter=$(echo "$adapter" | tr -d ' ')  # Trim whitespace
+        setup_script="${ADAPTERS_DIR}/setup_${adapter}.sh"
+
+        if [ -f "$setup_script" ]; then
+            chmod +x "$setup_script"
+            source "$setup_script"
+
+            # Call the setup function
+            setup_func="setup_${adapter}"
+            if declare -f "$setup_func" > /dev/null 2>&1; then
+                if $setup_func; then
+                    ADAPTERS_INSTALLED=$((ADAPTERS_INSTALLED + 1))
+                fi
+            else
+                log_warn "Setup function '${setup_func}' not found in ${setup_script}"
+            fi
+        else
+            log_warn "Adapter script not found: ${setup_script}"
+            log_warn "Available: $(ls ${ADAPTERS_DIR}/setup_*.sh 2>/dev/null | xargs -I{} basename {} | sed 's/setup_//;s/\.sh//' | tr '\n' ',' | sed 's/,$//')"
+        fi
+    done
+
+    log_info "Adapters configured: ${ADAPTERS_INSTALLED}/${#ADAPTERS[@]}"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 5: Model Framework Packages
+# ═══════════════════════════════════════════════════════════════════════════
+log_section "Step 6: Model Packages"
+
+pip install --quiet onnx>=1.14 numpy>=1.24 pillow>=10.0 2>/dev/null || true
+log_ok "Core packages: onnx, numpy, pillow"
+
+if [ "$MOCK_ONLY" = false ]; then
+    pip install --quiet onnxruntime>=1.16 2>/dev/null && log_ok "onnxruntime" || log_warn "onnxruntime failed"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 6: Verification
+# ═══════════════════════════════════════════════════════════════════════════
+TEST_RESULT=""
+if [ "$SKIP_TESTS" = true ]; then
+    log_section "Step 7: Verification (Skipped)"
+else
+    log_section "Step 7: Verification"
+    log_info "Running test suite..."
+    echo ""
+    TEST_RESULT=$(pytest tests/ -q --tb=no 2>&1 | tail -1)
+    echo "    $TEST_RESULT"
+    echo ""
+    if echo "$TEST_RESULT" | grep -q "passed"; then
+        log_ok "Tests passing"
+    else
+        log_warn "Some tests may have issues"
+    fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STEP 7: Generate activate.sh
+# ═══════════════════════════════════════════════════════════════════════════
+log_section "Step 8: Activation Script"
+
+cat > "${SCRIPT_DIR}/activate.sh" << 'ACTIVATE_HEADER'
+#!/usr/bin/env bash
+# QUAD Environment Activation — source this in each new terminal
+# Usage: source ./activate.sh
+ACTIVATE_HEADER
+
+cat >> "${SCRIPT_DIR}/activate.sh" << ACTIVATE_BODY
+
+# Python virtual environment
+source "${VENV_DIR}/bin/activate"
+
+# QAIRT/SNPE SDK
+ACTIVATE_BODY
+
+if [ -n "${QAIRT_SDK_ROOT:-}" ] && [ -d "${QAIRT_SDK_ROOT}" ]; then
+    cat >> "${SCRIPT_DIR}/activate.sh" << ACTIVATE_SDK
+export QAIRT_SDK_ROOT="${QAIRT_SDK_ROOT}"
+export QNN_SDK_ROOT="${QAIRT_SDK_ROOT}"
+export SNPE_ROOT="${QAIRT_SDK_ROOT}"
+export PATH="${QAIRT_SDK_ROOT}/bin/x86_64-linux-clang:\${PATH}"
+export LD_LIBRARY_PATH="${QAIRT_SDK_ROOT}/lib/x86_64-linux-clang:\${LD_LIBRARY_PATH:-}"
+export PYTHONPATH="${QAIRT_SDK_ROOT}/lib/python/:\${PYTHONPATH:-}"
+ACTIVATE_SDK
+else
+    echo '# QAIRT SDK not installed — running in mock mode' >> "${SCRIPT_DIR}/activate.sh"
+fi
+
+if [ -n "${HEXAGON_TOOLS_DIR:-}" ]; then
+    echo "export HEXAGON_TOOLS_DIR=\"${HEXAGON_TOOLS_DIR}\"" >> "${SCRIPT_DIR}/activate.sh"
+fi
+
+cat >> "${SCRIPT_DIR}/activate.sh" << 'ACTIVATE_FOOTER'
+
+echo ""
+echo "  QUAD environment activated"
+echo "  Python: $(python --version 2>&1)"
+echo "  Mode: $(grep -m1 adapter_mode quad.toml 2>/dev/null || echo 'mock')"
+[ -n "${QAIRT_SDK_ROOT:-}" ] && echo "  SDK: ${QAIRT_SDK_ROOT}"
+echo ""
+echo "  Commands: ./launch.sh | quad quickstart | quad doctor | make test"
+echo ""
+ACTIVATE_FOOTER
+
+chmod +x "${SCRIPT_DIR}/activate.sh"
+log_ok "Created activate.sh"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SUMMARY
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+echo -e "${BOLD}${GREEN}  Installation Complete!${NC}"
+echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════════${NC}"
+echo ""
+echo "  Platform:  quad-agent installed"
+if [ -n "${QAIRT_SDK_ROOT:-}" ] && [ -d "${QAIRT_SDK_ROOT:-/x}" ]; then
+    echo -e "  QAIRT SDK: ${GREEN}v${QAIRT_VERSION} (real mode available)${NC}"
+else
+    echo -e "  QAIRT SDK: ${YELLOW}Not installed (mock mode)${NC}"
+fi
+[ -n "$TEST_RESULT" ] && echo "  Tests:     $TEST_RESULT"
+echo ""
+echo -e "  ${BOLD}To get started:${NC}"
+echo ""
+echo "    source ./activate.sh         # Activate environment"
+echo "    ./launch.sh                  # Start MCP server"
+echo "    quad quickstart              # Interactive wizard"
+echo ""
+echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"

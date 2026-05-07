@@ -1,0 +1,38 @@
+{
+  "name": "quad-vscode",
+  "displayName": "QUAD — Qualcomm Unified Agent for Developers",
+  "description": "Claude Code MCP agent for Qualcomm AI inference workflows",
+  "version": "0.1.0",
+  "publisher": "qualcomm",
+  "engines": {"vscode": "^1.85.0"},
+  "categories": ["Machine Learning", "Other"],
+  "activationEvents": ["workspaceContains:quad.toml", "onCommand:quad.detectHardware"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {"command": "quad.detectHardware", "title": "QUAD: Detect Hardware"},
+      {"command": "quad.convertModel", "title": "QUAD: Convert Model"},
+      {"command": "quad.profileWorkload", "title": "QUAD: Profile Workload"},
+      {"command": "quad.orchestrateWorkload", "title": "QUAD: Orchestrate Workload"},
+      {"command": "quad.generateCode", "title": "QUAD: Generate Code"}
+    ],
+    "configuration": {
+      "title": "QUAD",
+      "properties": {
+        "quad.serverCommand": {"type": "string", "default": "quad-server", "description": "Command to start the QUAD MCP server"},
+        "quad.configPath": {"type": "string", "default": "quad.toml", "description": "Path to quad.toml configuration"},
+        "quad.adapterMode": {"type": "string", "enum": ["mock", "real"], "default": "mock", "description": "Adapter mode (mock for development, real for hardware)"}
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}

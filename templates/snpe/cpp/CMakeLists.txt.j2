@@ -1,0 +1,150 @@
+cmake_minimum_required(VERSION 3.14)
+project(quad_snpe_inference CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ── SNPE SDK ──
+{% if sdk_path %}
+set(SNPE_ROOT "{{ sdk_path }}")
+{% else %}
+if(DEFINED ENV{SNPE_ROOT})
+    set(SNPE_ROOT $ENV{SNPE_ROOT})
+elseif(DEFINED ENV{QAIRT_SDK_ROOT})
+    set(SNPE_ROOT $ENV{QAIRT_SDK_ROOT})
+else()
+    message(FATAL_ERROR "SNPE_ROOT or QAIRT_SDK_ROOT not set. Run: source activate.sh (Linux) or set system env var (Windows)")
+endif()
+{% endif %}
+
+message(STATUS "SNPE_ROOT: ${SNPE_ROOT}")
+
+# ── Platform/Architecture Detection ──
+# ARM64X Support (SC8380XP — Windows ARM64X docs):
+#   Scenario 1: ARM64/ARM64EC/ARM64X app → ARM64X SNPE.lib + ARM64X SNPE.dll
+#   Scenario 2: x86_64 app → x86_64 SNPE.lib + ARM64X SNPE.dll (run with ARM64X)
+#   Tools, APIs, tutorials are the same as ARM64.
+if(WIN32)
+    if(CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64X")
+        # SC8380XP native ARM64X binary
+        set(TARGET_ARCH "arm64x-windows-msvc")
+        set(SNPE_LIB_NAME "SNPE")
+        message(STATUS "Building ARM64X binary (SC8380XP) — uses arm64x-windows-msvc libs")
+    elseif(CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64EC")
+        # ARM64EC (Emulation Compatible) — uses same libs as ARM64
+        set(TARGET_ARCH "aarch64-windows-msvc")
+        set(SNPE_LIB_NAME "SNPE")
+        message(STATUS "Building ARM64EC binary — uses aarch64-windows-msvc libs")
+    elseif(CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "ARM64")
+        set(TARGET_ARCH "aarch64-windows-msvc")
+        set(SNPE_LIB_NAME "SNPE")
+    else()
+        set(TARGET_ARCH "x86_64-windows-msvc")
+        set(SNPE_LIB_NAME "SNPE")
+    endif()
+    set(SNPE_SHARED_LIB "SNPE.dll")
+else()
+{% if target_arch %}
+    set(TARGET_ARCH "{{ target_arch }}")
+{% else %}
+    set(TARGET_ARCH "x86_64-linux-clang")
+{% endif %}
+    set(SNPE_LIB_NAME "SNPE")
+    set(SNPE_SHARED_LIB "libSNPE.so")
+endif()
+
+message(STATUS "TARGET_ARCH: ${TARGET_ARCH}")
+
+# ── Optional: Build with static VCRUNTIME (Windows) ──
+option(BUILD_WITH_VCRUNTIME "Build with static MSVC runtime (/MT)" OFF)
+if(WIN32 AND BUILD_WITH_VCRUNTIME)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    message(STATUS "Using static VCRUNTIME (/MT)")
+endif()
+
+# ── Include paths ──
+include_directories(
+    ${SNPE_ROOT}/include/SNPE
+)
+
+# ── Library paths ──
+link_directories(
+    ${SNPE_ROOT}/lib/${TARGET_ARCH}
+)
+
+# ── Source files ──
+add_executable(inference
+    inference.cpp
+)
+
+# ── Link SNPE ──
+target_link_libraries(inference ${SNPE_LIB_NAME})
+
+# ── Post-build: Copy SNPE shared library next to executable ──
+if(WIN32)
+    # Copy SNPE.dll to output directory
+    add_custom_command(TARGET inference POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SNPE_ROOT}/lib/${TARGET_ARCH}/SNPE.dll"
+            $<TARGET_FILE_DIR:inference>
+        COMMENT "Copying SNPE.dll to output directory"
+    )
+    # Copy additional HTP/DSP DLLs if present
+    file(GLOB SNPE_DLLS "${SNPE_ROOT}/lib/${TARGET_ARCH}/*.dll")
+    foreach(DLL ${SNPE_DLLS})
+        add_custom_command(TARGET inference POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DLL}" $<TARGET_FILE_DIR:inference>
+        )
+    endforeach()
+else()
+    add_custom_command(TARGET inference POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SNPE_ROOT}/lib/${TARGET_ARCH}/libSNPE.so"
+            $<TARGET_FILE_DIR:inference>
+        COMMENT "Copying libSNPE.so to output directory"
+    )
+endif()
+
+# ── Install ──
+install(TARGETS inference DESTINATION bin)
+
+# ═══════════════════════════════════════════════════════════════════
+# Build Instructions:
+#
+# Linux (x86_64):
+#   mkdir build && cd build
+#   cmake .. -DTARGET_ARCH=x86_64-linux-clang
+#   cmake --build . --config Release
+#
+# Linux (ARM64 cross-compile):
+#   mkdir build && cd build
+#   cmake .. -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ -DTARGET_ARCH=aarch64-oe-linux-gcc11.2
+#   cmake --build . --config Release
+#
+# Windows (x64):
+#   mkdir build && cd build
+#   cmake .. -A x64
+#   cmake --build . --config Release
+#
+# Windows (ARM64):
+#   cmake .. -A ARM64
+#   cmake --build . --config Release
+#
+# Windows ARM64X (SC8380XP — native ARM64X binary):
+#   cmake .. -A ARM64X
+#   cmake --build . --config Release
+#   # Links arm64x-windows-msvc/SNPE.lib; runs on ARM64X SNPE.dll
+#
+# Windows ARM64EC (Emulation Compatible):
+#   cmake .. -A ARM64EC
+#   cmake --build . --config Release
+#   # Uses aarch64-windows-msvc libs (same as ARM64)
+#
+# Windows x86_64 app on ARM64X device (scenario 2):
+#   cmake .. -A x64   # Standard x64 build
+#   # At runtime: ARM64X SNPE.dll handles execution transparently
+#
+# Windows (with static VCRUNTIME — no redistributable needed):
+#   cmake .. -A ARM64 -DBUILD_WITH_VCRUNTIME=ON
+#   cmake --build . --config Release
+# ═══════════════════════════════════════════════════════════════════
