@@ -155,14 +155,22 @@ class TestFrontendONNX:
 
 
 class TestCompilePipeline:
+    """Existing happy-path tests — pass allow_placeholder_backend=True
+    so they get the legacy behaviour. The honest-stub path is covered
+    by TestHonestBackend below."""
+
     def test_compile_to_all_targets(self) -> None:
-        qbin = compile_model("model.onnx")
+        qbin = compile_model("model.onnx", allow_placeholder_backend=True)
         assert qbin.name == "model"
         assert qbin.ir is not None
         assert qbin.num_targets >= 4  # All known capabilities
 
     def test_compile_specific_targets(self) -> None:
-        qbin = compile_model("model.onnx", targets=["qnpu_v3", "qdsp_v66"])
+        qbin = compile_model(
+            "model.onnx",
+            targets=["qnpu_v3", "qdsp_v66"],
+            allow_placeholder_backend=True,
+        )
         assert qbin.num_targets == 2
         assert qbin.has_target("qnpu_v3")
         assert qbin.has_target("qdsp_v66")
@@ -174,16 +182,83 @@ class TestCompilePipeline:
 
     def test_compile_and_save(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".qbin", delete=False) as f:
-            qbin = compile_model("model.onnx", output_path=f.name)
+            qbin = compile_model(
+                "model.onnx", output_path=f.name, allow_placeholder_backend=True
+            )
             loaded = QBin.load(f.name)
         assert loaded.name == qbin.name
         assert loaded.num_targets == qbin.num_targets
 
     def test_metadata_populated(self) -> None:
-        qbin = compile_model("resnet50.onnx")
+        qbin = compile_model("resnet50.onnx", allow_placeholder_backend=True)
         assert qbin.metadata["source_format"] == "onnx"
         assert qbin.metadata["num_nodes"] > 0
 
     def test_unsupported_format_raises(self) -> None:
         with pytest.raises(ValueError, match="Unsupported source format"):
             compile_model("model.tflite")
+
+
+class TestHonestBackend:
+    """T1.1 partial: the default backend should refuse to fabricate
+    binary content. Coverage report should be produced regardless."""
+
+    def test_default_raises_backend_not_implemented(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("QUAD_PLACEHOLDER_BACKEND", raising=False)
+        from quad.compiler.pipeline import BackendNotImplementedError
+
+        with pytest.raises(BackendNotImplementedError) as exc:
+            compile_model("model.onnx")
+        # The error message should point at the three escape hatches
+        assert "QAIRTAdapter" in str(exc.value) or "convert_model" in str(exc.value)
+        assert "coverage_only" in str(exc.value)
+        assert "portable" in str(exc.value)
+
+    def test_coverage_only_skips_backend(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("QUAD_PLACEHOLDER_BACKEND", raising=False)
+        qbin = compile_model("model.onnx", coverage_only=True)
+        assert qbin.ir is not None
+        assert qbin.num_targets == 0  # backend skipped
+        # Coverage report should be in metadata
+        assert "coverage" in qbin.metadata
+        assert isinstance(qbin.metadata["coverage"], dict)
+
+    def test_portable_skips_backend(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("QUAD_PLACEHOLDER_BACKEND", raising=False)
+        qbin = compile_model("model.onnx", portable=True)
+        assert qbin.num_targets == 0
+        assert "coverage" in qbin.metadata
+
+    def test_env_var_opts_into_placeholder(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("QUAD_PLACEHOLDER_BACKEND", "1")
+        qbin = compile_model("model.onnx")
+        # Placeholder bytes are emitted
+        assert qbin.num_targets > 0
+
+    def test_coverage_report_structure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("QUAD_PLACEHOLDER_BACKEND", raising=False)
+        qbin = compile_model(
+            "model.onnx",
+            targets=["qnpu_v3"],
+            coverage_only=True,
+        )
+        cov = qbin.metadata["coverage"]
+        assert "qnpu_v3" in cov
+        report = cov["qnpu_v3"]
+        # Report shape
+        assert "total_ops" in report
+        assert "supported_ops" in report
+        assert "coverage_pct" in report
+        assert "is_fully_covered" in report
+        assert "unsupported_ops" in report
+        assert "fallback_recommendation" in report

@@ -1,14 +1,57 @@
-"""Compilation pipeline — end-to-end model compilation."""
+"""Compilation pipeline — end-to-end model compilation.
+
+Closes part of GAP_ANALYSIS T1.1: previously this module returned
+``b"QUAD_COMPILED_BINARY"`` placeholder bytes for every target,
+silently lying about what the user got. Now:
+
+* The frontend (ONNX → IR) is real (uses ``onnx.load`` when the
+  package is installed; falls back to a representative mock graph
+  when it isn't).
+* The backend is **honestly stubbed** — by default it raises
+  ``NotImplementedError`` rather than emitting placeholder bytes.
+* A new ``coverage`` field on the QBin metadata reports % of ops
+  covered per target, with the unsupported list, so the user can
+  see what would or wouldn't compile.
+* Set ``allow_placeholder_backend=True`` (or
+  ``QUAD_PLACEHOLDER_BACKEND=1`` env var) to opt back into the
+  legacy behaviour, e.g. for tests that don't need real binaries.
+
+Real backend implementations (QNN context binary generation, SNPE
+DLC compilation) require deep SDK integration and are outside the
+scope of this phase. The honest stub + coverage report mean the user
+can plan around the gap rather than discovering it at runtime.
+"""
 
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
 from typing import Literal
 
 from quad.compiler.capabilities import ComputeCapability, get_capability, list_capabilities
 from quad.compiler.frontend_onnx import compile_onnx
 from quad.compiler.ir import IRGraph, QuadIR
+from quad.compiler.op_coverage import compute_coverage_for_targets
 from quad.compiler.qbin import QBin
+
+logger = logging.getLogger(__name__)
+
+
+class BackendNotImplementedError(NotImplementedError):
+    """Raised when a real backend compilation is requested but not yet wired.
+
+    Phase E of the gap-closure plan does the *frontend* honestly (real
+    ONNX -> IR), but the *backend* (IR -> SDK-compiled binary for a
+    specific target) is still pending real SDK integration. Set
+    ``allow_placeholder_backend=True`` if you want the legacy
+    placeholder bytes (e.g. for testing).
+    """
+
+
+def _placeholder_backend_allowed() -> bool:
+    """Whether the legacy placeholder backend is opted into."""
+    return os.environ.get("QUAD_PLACEHOLDER_BACKEND", "").strip().lower() in {"1", "true", "yes"}
 
 
 def compile_model(
@@ -16,36 +59,74 @@ def compile_model(
     output_path: str | None = None,
     targets: list[str] | Literal["all"] = "all",
     portable: bool = False,
+    *,
+    allow_placeholder_backend: bool | None = None,
+    coverage_only: bool = False,
 ) -> QBin:
     """Compile a model to QUAD binary format.
 
     Pipeline:
-    1. Frontend: Parse source format → QUAD IR
-    2. (Optional) Optimize IR
-    3. Backend: Generate target-specific binaries
-    4. Package into .qbin fat binary
+      1. Frontend: Parse source format → QUAD IR (real)
+      2. Coverage: Compute op-support % for each target (real)
+      3. (Optional) Optimize IR — currently a no-op
+      4. Backend: Generate target-specific binaries
+         * If ``allow_placeholder_backend`` (or
+           ``QUAD_PLACEHOLDER_BACKEND=1``): emit literal placeholder
+           bytes, same as the historical behaviour. Useful for tests.
+         * Otherwise: raise ``BackendNotImplementedError`` for the
+           first target (callers can catch and use ``coverage_only=True``
+           to get just the IR + coverage report).
+      5. Package into .qbin fat binary
 
     Args:
-        model_path: Path to source model (.onnx, .pt)
+        model_path: Path to source model (.onnx, .pt, .pth)
         output_path: Where to save .qbin (auto-generated if None)
         targets: List of target capabilities, or "all" for all known targets
         portable: If True, include only QIR (JIT at load time)
+        allow_placeholder_backend: Opt into the legacy placeholder
+            backend that emits ``b"QUAD_COMPILED_BINARY"``. Defaults to
+            the value of ``QUAD_PLACEHOLDER_BACKEND``.
+        coverage_only: If True, skip the backend step entirely and
+            return a QBin with only the IR + coverage metadata.
 
     Returns:
-        QBin containing compiled artifacts
+        QBin containing compiled artifacts (or just IR + coverage if
+        ``coverage_only`` / ``portable`` are set).
+
+    Raises:
+        BackendNotImplementedError: in real-backend mode, when the SDK
+            integration for at least one target is not yet wired.
+        ValueError: when the source format is unsupported.
     """
     path = Path(model_path)
 
-    # Step 1: Frontend — parse to IR
+    # Step 1: Frontend — parse to IR (real where possible)
     if path.suffix in (".onnx",):
         ir_graph = compile_onnx(model_path)
     elif path.suffix in (".pt", ".pth"):
-        # PyTorch frontend stub — uses mock IR for now
-        ir_graph = compile_onnx(model_path)  # Same mock path
+        # PyTorch frontend stub — uses mock IR for now (real path
+        # requires torch.onnx.export, which torch isn't a core dep)
+        logger.warning(
+            "pytorch_frontend_uses_mock_ir",
+            extra={"path": str(path), "reason": "torch.onnx.export not invoked"},
+        )
+        ir_graph = compile_onnx(model_path)
     else:
         raise ValueError(f"Unsupported source format: {path.suffix}")
 
-    # Step 2: Create QBin
+    # Step 2: Resolve target list
+    if targets == "all":
+        target_caps = list_capabilities()
+    else:
+        target_caps = [get_capability(t) for t in targets]
+
+    # Step 3: Compute op coverage for each target
+    coverage_reports = compute_coverage_for_targets(
+        ir_graph,
+        targets=[c.name for c in target_caps],
+    )
+
+    # Step 4: Build QBin with IR + coverage metadata
     qbin = QBin(name=ir_graph.name, ir=ir_graph)
     qbin.metadata = {
         "source_format": path.suffix.lstrip("."),
@@ -53,25 +134,41 @@ def compile_model(
         "num_nodes": ir_graph.num_nodes,
         "input_shapes": [t.shape for t in ir_graph.inputs],
         "output_shapes": [t.shape for t in ir_graph.outputs],
+        "coverage": {target: report.to_dict() for target, report in coverage_reports.items()},
     }
 
-    # Step 3: Generate target binaries (if not portable-only)
-    if not portable:
-        if targets == "all":
-            target_caps = list_capabilities()
-        else:
-            target_caps = [get_capability(t) for t in targets]
+    # Step 5: Backend — emit placeholder OR raise honestly
+    if portable or coverage_only:
+        # Portable / coverage-only: skip backend entirely
+        pass
+    else:
+        if allow_placeholder_backend is None:
+            allow_placeholder_backend = _placeholder_backend_allowed()
 
-        for cap in target_caps:
-            # Mock: generate placeholder binary for each target
-            # Real: invoke QNN/SNPE compiler for each target
-            qbin.add_target(
-                target=cap.name,
-                format="qnn" if "npu_v3" in cap.name else "snpe",
-                data=b"QUAD_COMPILED_BINARY",  # Placeholder
+        if allow_placeholder_backend:
+            for cap in target_caps:
+                qbin.add_target(
+                    target=cap.name,
+                    format="qnn" if "npu" in cap.name.lower() else "snpe",
+                    data=b"QUAD_COMPILED_BINARY",  # Legacy placeholder
+                )
+        else:
+            # Honest stub: refuse to fabricate binary content. Users
+            # who need real binaries should call into QAIRTAdapter.
+            # convert_model directly, which shells out to the SDK.
+            raise BackendNotImplementedError(
+                f"Backend SDK call to compile IR -> binary is not yet wired for "
+                f"target(s) {[c.name for c in target_caps]}. Options:\n"
+                f"  1. Use QAIRTAdapter.convert_model() to invoke the QAIRT SDK "
+                "tools directly (qairt-converter / qairt-quantizer).\n"
+                "  2. Pass coverage_only=True to skip the backend and get just "
+                "the IR + op-coverage report.\n"
+                "  3. Pass portable=True to package only the QIR (JIT at load).\n"
+                "  4. Set QUAD_PLACEHOLDER_BACKEND=1 to opt into the legacy "
+                "placeholder bytes (testing only)."
             )
 
-    # Step 4: Save if output path specified
+    # Step 6: Save if output path specified
     if output_path:
         qbin.save(output_path)
 
