@@ -24,7 +24,8 @@ class TargetBinary:
 class QBin:
     """QUAD Binary — fat binary containing IR + target-specific compilations.
 
-    Like CUDA fat binaries: embed QIR + multiple target compilations.
+    Embeds a QIR plus pre-compiled binaries for one or more targets
+    (CPU / Adreno / Hexagon HTP, possibly multiple HTP versions).
     At load time, select best match for current hardware; JIT from QIR if none match.
     """
     name: str

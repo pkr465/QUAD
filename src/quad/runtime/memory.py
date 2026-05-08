@@ -12,7 +12,8 @@ class MemoryPool:
     """Pre-allocated memory pool for inference serving.
 
     Eliminates allocation overhead by reusing pre-allocated buffers.
-    Critical for high-throughput serving (like CUDA memory pools).
+    Critical for high-throughput serving where per-request malloc/free
+    would otherwise dominate latency.
 
     Usage:
         pool = MemoryPool(device=Device("npu"), size_mb=64)

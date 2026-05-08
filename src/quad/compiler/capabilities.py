@@ -7,9 +7,11 @@ from dataclasses import dataclass
 
 @dataclass
 class ComputeCapability:
-    """Hardware compute capability descriptor (like CUDA's sm_80, sm_90).
+    """Hardware compute capability descriptor (e.g. ``qnpu_v3`` for Hexagon v73).
 
     Defines what operations a target supports and at what performance level.
+    The capability tag is the matching key used by ``QBin`` at load time
+    to pick a target-specific pre-compiled binary.
     """
     name: str           # e.g. "qnpu_v3"
     chipset: str        # e.g. "Snapdragon X Elite"

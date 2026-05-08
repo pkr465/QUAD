@@ -1,7 +1,9 @@
 """QUAD IR — Portable Intermediate Representation.
 
-The QUAD IR is a device-agnostic representation of a computation graph.
-Equivalent to CUDA's PTX — compile once, JIT to any target at load time.
+The QUAD IR is a device-agnostic representation of a computation graph:
+compile once, JIT to any target at load time. The same QIR can be
+finalised for CPU, GPU (Adreno), or NPU (Hexagon HTP) when the model
+is loaded on a specific device.
 """
 
 from __future__ import annotations

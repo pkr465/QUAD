@@ -1,8 +1,9 @@
 """QUAD Graphs — captured execution for sub-100us replay overhead.
 
-Like CUDA Graphs, QUAD Graphs allow capturing a sequence of operations
-into a replayable graph. On replay, the graph is dispatched as a single
-unit with minimal host-side overhead.
+A Graph captures a sequence of operations into a replayable unit. On
+replay, the entire graph is dispatched in one call with minimal host-side
+overhead — useful when the same op sequence runs many times (e.g. each
+frame of a video pipeline).
 
 Usage:
     with Graph.capture() as g:

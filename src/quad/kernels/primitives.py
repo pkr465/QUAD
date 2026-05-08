@@ -4,8 +4,9 @@ Provides Python-callable equivalents of Hexagon HVX hardware instructions.
 In mock mode, these operate on numpy arrays. In real mode, they map to
 actual HVX vector instructions via the compiler backend.
 
-These primitives are analogous to CUDA intrinsics (__syncthreads, __shfl, etc.)
-but for Qualcomm's Hexagon Vector eXtensions (HVX).
+These primitives wrap Qualcomm's Hexagon Vector eXtensions (HVX) — the
+SIMD/vector instruction set used by Hexagon DSP/HTP cores — exposing
+them at a level kernel authors can compose into custom NPU kernels.
 
 Usage:
     from quad.kernels.primitives import hvx_vload, hvx_vadd, barrier
@@ -201,8 +202,9 @@ def hvx_vmin(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 def hvx_shuffle(tensor: np.ndarray, pattern: np.ndarray | list[int]) -> np.ndarray:
     """Cross-lane shuffle — permute elements within an HVX vector.
 
-    Analogous to CUDA's __shfl_sync. Rearranges elements according to
-    the index pattern provided.
+    Rearranges elements according to the index pattern provided. Useful
+    for register-level data reorganisation (transpose, broadcast, gather)
+    without going through memory.
 
     Args:
         tensor: Input vector to shuffle.
@@ -275,8 +277,9 @@ def dma_async(dst: Any, src: Any) -> DMATransfer:
 def barrier() -> None:
     """Synchronize all HVX hardware threads.
 
-    Analogous to CUDA's __syncthreads(). Ensures all threads in the
-    workgroup have reached this point before proceeding.
+    Ensures all threads in the workgroup have reached this point before
+    proceeding. Required when one thread's later read depends on another
+    thread's earlier write.
 
     In mock mode, this is a no-op since execution is sequential.
     """
