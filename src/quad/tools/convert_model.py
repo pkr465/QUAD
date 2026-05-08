@@ -47,4 +47,16 @@ async def convert_model_impl(
         mean_values=mean_values,
     )
     result = await adapter.convert_model(request)
-    return result.model_dump()
+    payload = result.model_dump()
+
+    # Enrich with UI summary + contextual tips for Claude Code rendering
+    try:
+        from quad.tips import get_tips_for
+        from quad.ui import format_conversion
+
+        payload["ui"] = format_conversion(payload)
+        payload["tips"] = [t.text for t in get_tips_for("convert", n=2)]
+    except Exception:
+        pass
+
+    return payload

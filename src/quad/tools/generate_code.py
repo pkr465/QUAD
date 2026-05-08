@@ -28,4 +28,26 @@ async def generate_code_impl(
     }
 
     result = engine.render(platform, language, variables, sdk=sdk)
-    return result.model_dump()
+    payload = result.model_dump()
+
+    # Enrich with file summary + tips
+    try:
+        from quad.tips import get_tips_for
+        from quad.ui.formatters import format_table
+
+        files = payload.get("source_files", {}) or {}
+        rows = [
+            [name, len(content.splitlines()), len(content)]
+            for name, content in files.items()
+        ]
+        payload["ui"] = (
+            f"### Generated code: {platform} / {language} / {sdk}\n\n"
+            + format_table(["File", "Lines", "Bytes"], rows, align=["l", "r", "r"])
+            + f"\n\n**Build:** `{payload.get('build_instructions', '?')}`\n"
+            + f"**Deps:** {', '.join(payload.get('dependencies', []) or ['—'])}"
+        )
+        payload["tips"] = [t.text for t in get_tips_for("codegen", n=2)]
+    except Exception:
+        pass
+
+    return payload

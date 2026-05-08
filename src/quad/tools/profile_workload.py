@@ -35,4 +35,29 @@ async def profile_workload_impl(
         sdk_root=sdk_root,
     )
     report = await adapter.profile(request)
-    return report.model_dump()
+    payload = report.model_dump()
+
+    # Enrich with markdown summary + bottleneck-driven suggestions
+    try:
+        from quad.suggestions import suggest_optimisations
+        from quad.tips import get_tips_for
+        from quad.ui import format_profile
+
+        payload["ui"] = format_profile(payload)
+        payload["tips"] = [t.text for t in get_tips_for("profile", n=2)]
+
+        bottlenecks: list[dict[str, Any]] = []
+        if payload.get("linting_layers"):
+            bottlenecks = [
+                layer for layer in payload["linting_layers"]
+                if layer.get("is_bottleneck")
+            ]
+        suggestions = suggest_optimisations(
+            bottlenecks=bottlenecks,
+            profiling_level=profiling_level,
+        )
+        payload["suggestions"] = [s.to_dict() for s in suggestions]
+    except Exception:
+        pass
+
+    return payload

@@ -144,4 +144,16 @@ async def orchestrate_workload_impl(
         gpu_utilization_pct=round((gpu_count / total) * 100, 1),
         cpu_utilization_pct=round((cpu_count / total) * 100, 1),
     )
-    return result.model_dump()
+    payload = result.model_dump()
+
+    # Enrich with UI summary + power-mode tips
+    try:
+        from quad.tips import get_tips_for
+        from quad.ui import format_allocation
+
+        payload["ui"] = format_allocation(payload)
+        payload["tips"] = [t.text for t in get_tips_for("orchestrate", n=2)]
+    except Exception:
+        pass
+
+    return payload
