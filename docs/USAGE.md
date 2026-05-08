@@ -1,7 +1,7 @@
 # QUAD Usage Guide
 
 > **QUAD** — Qualcomm Unified Agent for Developers
-> The CUDA of Qualcomm: unified AI computing platform for all Qualcomm SoCs.
+> A unified AI computing platform for all Qualcomm SoCs.
 
 This guide covers the full QUAD platform — from installation to production inference serving.
 

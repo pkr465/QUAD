@@ -1,8 +1,8 @@
-# QUAD Platform — Implementation Guide (CUDA Parity)
+# QUAD Platform — Implementation Guide
 
-> **Vision**: Build QUAD into the CUDA of Qualcomm — a unified AI computing platform for all Qualcomm SoCs.
-> **Benchmark**: NVIDIA CUDA Platform (14 interlocking capabilities + libraries + ecosystem)
-> **Timeline**: 12-14 months to platform parity; Qualcomm differentiators from Day 1
+> **Vision**: A unified AI computing platform for all Qualcomm SoCs.
+> **Scope**: 14 interlocking capabilities + libraries + ecosystem across the 7-layer stack.
+> **Timeline**: 12-14 months to full platform; Qualcomm differentiators from Day 1
 
 ---
 

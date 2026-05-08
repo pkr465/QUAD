@@ -106,9 +106,9 @@ When asked to generate a sample app or demonstrate QUAD, follow this pattern:
 
 > **When resuming work in this repository, read this section first to understand current state.**
 
-### Vision: QUAD = The CUDA of Qualcomm
+### Vision: Unified AI computing platform for Qualcomm SoCs
 
-QUAD is evolving from an MCP agent into a **full AI computing platform** for Qualcomm SoCs, equivalent to NVIDIA CUDA. The platform has 7 layers: Hardware → Compiler → Runtime → Libraries → Optimizer → Serve → DevX/Ecosystem.
+QUAD is evolving from an MCP agent into a **full AI computing platform** for Qualcomm SoCs. The platform has 7 layers: Hardware → Compiler → Runtime → Libraries → Optimizer → Serve → DevX/Ecosystem.
 
 ### Critical Path
 

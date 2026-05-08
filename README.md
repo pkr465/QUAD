@@ -15,7 +15,7 @@
 **QUAD** (**Q**ualcomm **U**nified **A**gent for **D**evelopers) is a Claude Code-powered MCP (Model Context Protocol) server that gives AI developers a single conversational interface to Qualcomm's SDK ecosystem. Instead of learning QNN, SNPE, Hexagon SDK, Adreno SDK, AIMET, and multiple profilers independently, developers express intent in natural language and receive production-ready inference code, profiling reports, and optimization recommendations automatically.
 
 **Target**: Time-to-First-Inference < 10 minutes from cold start.
-**Vision**: The CUDA of Qualcomm — a full 7-layer AI computing platform for Qualcomm SoCs.
+**Vision**: A full 7-layer unified AI computing platform for Qualcomm SoCs.
 
 ---
 

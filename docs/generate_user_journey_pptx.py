@@ -46,7 +46,7 @@ def create_presentation():
         bullets=[
             "Developer finds QUAD via: GitHub, Qualcomm DevRel, Claude Code marketplace",
             'First impression: README with clear value proposition',
-            '"The CUDA of Qualcomm \u2014 one platform for all Qualcomm silicon"',
+            '"One platform for all Qualcomm silicon"',
             "Unified SDK for NPU, GPU, DSP across mobile, PC, IoT, automotive",
         ],
         slide_num=2,

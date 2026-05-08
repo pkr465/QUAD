@@ -203,7 +203,7 @@ add_formatted_paragraph(doc, "Qualcomm Unified Agent for Developers",
                         space_after=18)
 
 # Tagline
-add_formatted_paragraph(doc, "The CUDA of Qualcomm",
+add_formatted_paragraph(doc, "A Unified AI Computing Platform for Qualcomm SoCs",
                         font_name="Calibri Light", font_size=16,
                         italic=True, color=LIGHT_GRAY,
                         alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=36)
