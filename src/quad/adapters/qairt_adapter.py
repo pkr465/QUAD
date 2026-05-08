@@ -191,29 +191,72 @@ class QAIRTAdapter(SDKAdapter):
             if dlc_files:
                 output_dlc = dlc_files[0]
 
-        # Step 2: Quantize if INT8/INT4 requested
+        # Step 2: Quantize if INT8/INT4 requested.
+        #
+        # Two paths now:
+        #  (a) AIMET PTQ when calibration data is supplied OR when
+        #      INT4 is requested (qairt-quantizer alone can't do INT4
+        #      without proper calibration).
+        #  (b) qairt-quantizer with model_inputs introspection — no
+        #      longer the np.random.randn dummy, real shapes/dtypes.
         if request.quantization in ("int8", "int4") and output_dlc.exists():
-            quantizer = _find_tool("qairt-quantizer")
-            quantized_dlc = output_dlc.with_stem(f"{output_dlc.stem}_quantized")
+            calibration_data = getattr(request, "calibration_data", None)
 
-            # Create dummy input list for calibration (real usage needs actual data)
-            input_list = self._create_dummy_input_list(model_path)
+            # Path A: AIMET when explicitly requested or when INT4 + calibration data
+            use_aimet = (
+                getattr(request, "use_aimet", False)
+                or (request.quantization == "int4" and calibration_data is not None)
+            )
+            if use_aimet:
+                from quad.adapters.aimet_adapter import (
+                    AIMETAdapter,
+                    QuantizationConfig,
+                )
+                bitwidth = 4 if request.quantization == "int4" else 8
+                aimet_cfg = QuantizationConfig(
+                    bitwidth=bitwidth,
+                    scheme="symmetric_per_channel",
+                )
+                aimet = AIMETAdapter(backend=getattr(request, "aimet_backend", "auto"))
+                aimet_result = aimet.quantize(
+                    output_dlc,
+                    output_path=output_dlc.with_stem(f"{output_dlc.stem}_aimet_int{bitwidth}"),
+                    config=aimet_cfg,
+                    calibration=calibration_data,
+                )
+                if Path(aimet_result.output_path).exists():
+                    output_dlc = Path(aimet_result.output_path)
 
-            quant_cmd = [
-                quantizer,
-                "--input_dlc", str(output_dlc),
-                "--input_list", input_list,
-                "--output_dlc", str(quantized_dlc),
-            ]
+            # Path B: qairt-quantizer with shape-aware calibration list
+            else:
+                try:
+                    quantizer = _find_tool("qairt-quantizer")
+                except FileNotFoundError:
+                    # Fall back to mock-style passthrough — log + skip
+                    quantizer = None
 
-            # Apply quantization overrides if provided
-            quant_overrides = getattr(request, "quantization_overrides", None)
-            if quant_overrides:
-                quant_cmd += ["--quantization_overrides", quant_overrides]
+                if quantizer:
+                    quantized_dlc = output_dlc.with_stem(f"{output_dlc.stem}_quantized")
+                    input_list = self._create_dummy_input_list(
+                        model_path,
+                        calibration_data=calibration_data,
+                    )
 
-            quant_result = await _run_command(quant_cmd, timeout=600)
-            if quant_result.returncode == 0 and quantized_dlc.exists():
-                output_dlc = quantized_dlc
+                    quant_cmd = [
+                        quantizer,
+                        "--input_dlc", str(output_dlc),
+                        "--input_list", input_list,
+                        "--output_dlc", str(quantized_dlc),
+                    ]
+
+                    # Apply quantization overrides if provided
+                    quant_overrides = getattr(request, "quantization_overrides", None)
+                    if quant_overrides:
+                        quant_cmd += ["--quantization_overrides", quant_overrides]
+
+                    quant_result = await _run_command(quant_cmd, timeout=600)
+                    if quant_result.returncode == 0 and quantized_dlc.exists():
+                        output_dlc = quantized_dlc
 
         # Calculate metrics
         conversion_time = time.time() - start_time

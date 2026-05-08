@@ -81,6 +81,10 @@ def run_doctor(real_mode: bool = False) -> DoctorReport:
     report.checks.append(_check_android_tools())
     report.checks.append(_check_qhas_prerequisites())
 
+    # Optional integrations — informational, not strict pre-flight
+    report.checks.append(_check_aimet_integration())
+    report.checks.append(_check_aihub_integration())
+
     if real_mode:
         report.checks.append(_check_adapter_mode_real())
         # Escalate any SDK-related warnings to failures
@@ -545,4 +549,69 @@ def _check_qhas_prerequisites() -> CheckResult:
         "warn",
         f"QHAS profiling not available: {'; '.join(issues)}. "
         "Install QAIRT SDK and ensure tools are in PATH.",
+    )
+
+
+def _check_aimet_integration() -> CheckResult:
+    """Check AIMET adapter availability for INT8/INT4 quantization (T1.5)."""
+    try:
+        from quad.adapters.aimet_adapter import AIMETAdapter
+    except Exception as e:
+        return CheckResult(
+            "AIMET integration",
+            "fail",
+            f"Cannot import AIMETAdapter: {e}",
+        )
+
+    a = AIMETAdapter(backend="auto")
+    info = a.doctor()
+    if info["aimet_torch_installed"] or info["aimet_onnx_installed"]:
+        which = "torch" if info["aimet_torch_installed"] else "onnx"
+        return CheckResult(
+            "AIMET integration",
+            "pass",
+            f"aimet_{which} available; backend={info['backend']}. "
+            f"INT8/INT4 quantization workflows enabled.",
+        )
+    return CheckResult(
+        "AIMET integration",
+        "warn",
+        "aimet not installed. INT8/INT4 quantization will use the qairt-quantizer "
+        "fallback (less accurate without proper calibration data). Install via: "
+        "pip install aimet-torch  (or aimet-onnx for ONNX-only flows).",
+    )
+
+
+def _check_aihub_integration() -> CheckResult:
+    """Check Qualcomm AI Hub cloud integration (T1.6)."""
+    try:
+        from quad.adapters.aihub_adapter import AIHubAdapter
+    except Exception as e:
+        return CheckResult(
+            "AI Hub integration",
+            "fail",
+            f"Cannot import AIHubAdapter: {e}",
+        )
+
+    a = AIHubAdapter(backend="auto")
+    info = a.doctor()
+    if info["backend"] == "qai_hub":
+        return CheckResult(
+            "AI Hub integration",
+            "pass",
+            "qai_hub installed and authenticated. Cloud profiling and compilation enabled.",
+        )
+    if info["qai_hub_installed"] and not info["auth_configured"]:
+        return CheckResult(
+            "AI Hub integration",
+            "warn",
+            "qai_hub installed but auth not configured. Run: "
+            "qai-hub configure --api_token <token>  "
+            "or set QAI_HUB_API_KEY env var. Get a token at https://app.aihub.qualcomm.com",
+        )
+    return CheckResult(
+        "AI Hub integration",
+        "warn",
+        "qai_hub not installed. Cloud profiling and compilation disabled. "
+        "Install via: pip install qai-hub  (or set QUAD_AIHUB_BACKEND=mock for tests).",
     )
