@@ -194,8 +194,13 @@ In rough effort order (smallest first):
 5. **T1.3 — Runtime ctypes/cffi to QNN C API** (1-2 weeks) — replace
    numpy mocks in `Device.infer` etc. with direct calls into
    `libQnnBackend.so`
-6. **T1.1 — Real compiler backend** (2-3 weeks) — IR → SDK call →
-   real binary. Currently raises `BackendNotImplementedError`; needs
-   `QnnContext_compose` + `QnnContext_finalize` integration
+6. **T1.1 — Real compiler backend** (3 days–3 weeks depending on path) —
+   IR → SDK call → real binary. Currently raises `BackendNotImplementedError`.
+   Three implementation paths with distinct dependency profiles:
+   **Path A** shells out to existing `qairt-converter` (~3-5 days),
+   **Path B** does real IR → ONNX → SDK (~1.5-3 weeks),
+   **Path C** uses AI Hub for cloud compilation (~3-5 days, no local SDK).
+   Full dependency analysis: see [`docs/BACKEND_COMPLETION_DEPENDENCIES.md`](BACKEND_COMPLETION_DEPENDENCIES.md).
+   **Recommendation:** Path A + C in 1 week, then Path B as follow-up.
 
 Total remaining: ~5-7 person-weeks, down from the original 6-10.
