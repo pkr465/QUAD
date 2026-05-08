@@ -215,14 +215,62 @@ def serve(
 
 
 @app.command()
-def detect() -> None:
-    """Detect available hardware devices."""
-    from quad.runtime import list_devices
+def detect(
+    refresh: bool = typer.Option(
+        False, "--refresh", help="Re-probe local hardware (skip the discovery cache)"
+    ),
+) -> None:
+    """Detect available hardware devices on the local machine.
 
-    devices = list_devices()
-    typer.echo("Detected devices:")
+    Performs a real OS-level probe (PowerShell on Windows, /proc on
+    Linux, sysctl on macOS, adb on Android when ANDROID_SERIAL is set)
+    and reports the actual CPU / GPU / NPU present, not a hardcoded list.
+    """
+    from quad.runtime import list_devices
+    from quad.runtime.host_probe import probe_host
+
+    info = probe_host()
+    devices = list_devices(refresh=refresh)
+
+    typer.echo("")
+    typer.echo("=== Host probe ===")
+    typer.echo(f"  OS:           {info.os_name or 'unknown'} ({info.os_arch or 'unknown'})")
+    if info.cpu_name:
+        typer.echo(
+            f"  CPU:          {info.cpu_name} "
+            f"({info.cpu_cores or '?'} cores"
+            + (f" / {info.cpu_threads} threads" if info.cpu_threads != info.cpu_cores else "")
+            + (f" @ {info.cpu_max_mhz} MHz" if info.cpu_max_mhz else "")
+            + ")"
+        )
+    if info.gpu_name:
+        typer.echo(f"  GPU:          {info.gpu_name}")
+    if info.npu_name:
+        typer.echo(f"  NPU:          {info.npu_name}")
+    if info.ram_gb:
+        typer.echo(f"  RAM:          {info.ram_gb} GB")
+    typer.echo(f"  Probe source: {info.source}")
+
+    typer.echo("")
+    typer.echo("=== Compute units ===")
     for d in devices:
-        typer.echo(f"  - {d.name} ({d.device_type})")
+        # Device exposes .type (not .device_type) — this previously crashed
+        marker = {"npu": "[NPU]", "gpu": "[GPU]", "cpu": "[CPU]"}.get(d.type, f"[{d.type}]")
+        if d.is_npu:
+            typer.echo(f"  {marker}  {d.name}  ({d.tops} TOPS, {d.memory_mb // 1024} GB)")
+        elif d.is_gpu:
+            typer.echo(f"  {marker}  {d.name}  ({d.tflops} TFLOPS, {d.memory_mb // 1024} GB)")
+        else:
+            freq = f", {d.cores * 1.0 if not d.cores else 0} GHz" if 0 else ""
+            typer.echo(f"  {marker}  {d.name}  ({d.cores} cores, {d.memory_mb // 1024} GB)")
+
+    typer.echo("")
+    if info.is_qualcomm:
+        typer.echo("Qualcomm hardware detected. Real-mode workflows are supported on this machine.")
+        typer.echo("Tip: run `quad mode` to confirm the SDK is wired, or `quad doctor --real-mode` for a full pre-flight.")
+    else:
+        typer.echo("Note: this doesn't look like Qualcomm hardware. QUAD will run in mock mode by default;")
+        typer.echo("      mock mode is fully functional for development without real silicon.")
 
 
 @app.command()

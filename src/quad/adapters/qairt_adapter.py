@@ -517,26 +517,141 @@ class QAIRTAdapter(SDKAdapter):
             "Unsqueeze", "Where", "Xor",
         ]
 
-    async def execute_inference(self, model_path: str, input_data: Any) -> Any:
-        """Execute inference using snpe-net-run."""
+    async def execute_inference(
+        self,
+        model_path: str,
+        input_data: Any = None,
+        *,
+        runtime: str = "auto",
+        timeout_s: float = 60.0,
+    ) -> dict[str, Any]:
+        """Execute inference using ``snpe-net-run`` with real I/O marshalling.
+
+        Closes GAP_ANALYSIS T1.4: the previous implementation ignored
+        ``input_data`` and used a hardcoded ``np.random.randn(1,3,224,224)``
+        regardless of what the caller passed; output was a 500-char
+        truncation of stdout, not actual inference outputs.
+
+        Now:
+        * Marshals ``input_data`` (a dict mapping input-tensor name to
+          numpy array, or a single numpy array for single-input models)
+          into per-tensor ``.raw`` files via ``model_inputs.write_input_list``
+        * If ``input_data`` is None, falls back to introspect-driven
+          random inputs of the right shape / dtype
+        * Runs ``snpe-net-run`` with ``--output_dir``
+        * Reads back the output ``.raw`` files using output shape/dtype
+          from model introspection (so the caller gets numpy arrays,
+          not file paths)
+
+        Args:
+            model_path: Path to the .dlc / .bin / .onnx file
+            input_data: dict[name, ndarray] OR a single ndarray (for
+                single-input models) OR None (random inputs)
+            runtime: 'cpu' / 'gpu' / 'npu' / 'auto'
+            timeout_s: kill snpe-net-run after this many seconds
+
+        Returns:
+            ``{"status": "success" | "error", "outputs": {name: ndarray, ...},
+               "returncode": int, "stdout": str, "stderr": str,
+               "model_io": {...}}``
+        """
+        from quad.adapters.model_inputs import (
+            ModelIO,
+            create_input_list_for_model,
+            introspect_model,
+            write_input_list,
+        )
+        import numpy as np
+
         tool = _find_tool("snpe-net-run")
-        input_list = self._create_dummy_input_list(Path(model_path))
+        model_p = Path(model_path)
+        if not model_p.exists():
+            raise FileNotFoundError(f"Model not found: {model_p}")
+
+        # 1) Build the per-tensor .raw files + input_list.txt
+        work_dir = Path(tempfile.mkdtemp(prefix="quad_infer_"))
+        input_dir = work_dir / "in"
+        output_dir = work_dir / "out"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Normalise input_data: accept None, single ndarray, or dict
+        cal_data: dict[str, np.ndarray] | None = None
+        if input_data is None:
+            model_io = introspect_model(model_p, sdk_root=self._sdk_root)
+        else:
+            model_io = introspect_model(model_p, sdk_root=self._sdk_root)
+            if hasattr(input_data, "shape"):
+                # Single ndarray — use it for the first input
+                if not model_io.inputs:
+                    # Fallback: synthesise a spec from the array shape
+                    from quad.adapters.model_inputs import TensorSpec
+                    model_io = ModelIO(
+                        inputs=[TensorSpec("input", tuple(int(d) for d in input_data.shape), str(input_data.dtype))],
+                        source="user-array",
+                    )
+                cal_data = {model_io.inputs[0].name: input_data}
+            elif isinstance(input_data, dict):
+                cal_data = input_data
+            else:
+                raise TypeError(
+                    f"input_data must be None, a numpy array, or a dict[name, array]; "
+                    f"got {type(input_data).__name__}"
+                )
+
+        list_path = write_input_list(
+            model_io,
+            output_dir=input_dir,
+            calibration_data=cal_data,
+        )
+
+        # 2) Build the snpe-net-run command
+        runtime_flag = {
+            "cpu": "--use_cpu",
+            "gpu": "--use_gpu",
+            "npu": "--use_dsp",
+            "auto": "--use_dsp",
+        }.get(runtime, "--use_dsp")
 
         cmd = [
             tool,
-            "--container", model_path,
-            "--input_list", input_list,
-            "--use_dsp",
+            "--container", str(model_p),
+            "--input_list", list_path,
+            "--output_dir", str(output_dir),
+            runtime_flag,
             "--perf_profile", "burst",
         ]
 
-        result = await _run_command(cmd, timeout=60)
+        result = await _run_command(cmd, timeout=timeout_s)
+
+        # 3) Read output .raw files back into numpy arrays
+        outputs: dict[str, np.ndarray] = {}
+        if result.returncode == 0:
+            # snpe-net-run writes outputs to <output_dir>/Result_N/<output_name>.raw
+            # for each input sample. We collect the first sample only here;
+            # callers needing batched results should use a higher-level helper.
+            result_dirs = sorted(p for p in output_dir.iterdir() if p.is_dir() and p.name.lower().startswith("result"))
+            if result_dirs:
+                first = result_dirs[0]
+                for out_spec in (model_io.outputs or []):
+                    raw_file = first / f"{out_spec.name}.raw"
+                    if raw_file.exists():
+                        arr = np.fromfile(raw_file, dtype=out_spec.numpy_dtype).reshape(out_spec.shape)
+                        outputs[out_spec.name] = arr
+                # If introspection didn't give us output specs, just
+                # return whatever .raw files we found as bytes.
+                if not outputs:
+                    for raw_file in first.glob("*.raw"):
+                        outputs[raw_file.stem] = np.fromfile(raw_file, dtype=np.float32)
 
         return {
             "status": "success" if result.returncode == 0 else "error",
             "returncode": result.returncode,
-            "stdout": result.stdout[:500],
-            "stderr": result.stderr[:500] if result.returncode != 0 else "",
+            "outputs": outputs,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "model_io": model_io.to_dict(),
+            "work_dir": str(work_dir),
         }
 
     def _create_dummy_input_list(

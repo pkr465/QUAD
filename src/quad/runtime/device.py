@@ -1,14 +1,28 @@
-"""QUAD Device — hardware discovery and abstraction."""
+"""QUAD Device — hardware discovery and abstraction.
+
+In addition to the legacy in-memory profiles for known Qualcomm
+chipsets, ``list_devices()`` now performs a real local-host probe
+(see ``quad.runtime.host_probe``) to populate fields with the actual
+hardware on the running machine. This closes GAP_ANALYSIS T3.6.
+"""
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
+
+from quad.runtime.host_probe import hostinfo_to_device_profiles, probe_host
+
+logger = logging.getLogger(__name__)
 
 DeviceType = Literal["cpu", "gpu", "npu", "auto"]
 
-# Known device profiles (mock data — replaced by real detection in real mode)
-_KNOWN_DEVICES = {
+# Legacy fallback profiles — used when the host probe doesn't detect
+# a particular compute unit. Values match what we previously hardcoded
+# (so behaviour is unchanged on systems where the probe finds nothing,
+# e.g. the CI sandbox).
+_FALLBACK_DEVICES: dict[str, dict[str, Any]] = {
     "npu": {
         "name": "Hexagon NPU",
         "type": "npu",
@@ -35,8 +49,41 @@ _KNOWN_DEVICES = {
     },
 }
 
+_KNOWN_DEVICES: dict[str, dict[str, Any]] = dict(_FALLBACK_DEVICES)
+
 # Priority order for auto device selection
 _DEVICE_PRIORITY = ["npu", "gpu", "cpu"]
+
+
+def _refresh_known_devices(force: bool = False) -> None:
+    """Refresh ``_KNOWN_DEVICES`` from a real host probe.
+
+    This is called lazily by ``list_devices()`` and ``Device.__init__``
+    so we never block module import on a subprocess. The first call
+    overlays the host probe's findings on top of the fallback profiles
+    — if the probe found a real CPU we use the real CPU; if it didn't,
+    we keep the Oryon fallback.
+
+    Args:
+        force: re-probe even if a previous call populated _KNOWN_DEVICES.
+            Useful for tests that monkeypatch the probe.
+    """
+    global _KNOWN_DEVICES
+    if not force and getattr(_refresh_known_devices, "_done", False):
+        return
+    try:
+        info = probe_host()
+        probed = hostinfo_to_device_profiles(info)
+        merged = dict(_FALLBACK_DEVICES)
+        merged.update(probed)
+        _KNOWN_DEVICES = merged
+        logger.debug(
+            "device_profiles_refreshed",
+            extra={"source": info.source, "probed_keys": list(probed.keys())},
+        )
+    except Exception as e:
+        logger.debug("host probe failed; using fallback profiles: %s", e)
+    setattr(_refresh_known_devices, "_done", True)
 
 
 @dataclass
@@ -130,12 +177,22 @@ def _resolve_auto_device() -> str:
     return "cpu"
 
 
-def list_devices() -> list[Device]:
-    """Enumerate all available compute devices.
+def list_devices(refresh: bool = False) -> list[Device]:
+    """Enumerate all available compute devices on the local machine.
+
+    The first call probes the local hardware via
+    ``quad.runtime.host_probe.probe_host`` to populate device fields
+    with real CPU / GPU / NPU info. Subsequent calls reuse the
+    cached probe (set ``refresh=True`` to re-probe).
+
+    Args:
+        refresh: re-run the host probe even if a previous call cached
+            its result.
 
     Returns:
         List of Device objects for all detected compute units.
     """
+    _refresh_known_devices(force=refresh)
     devices = []
     for dtype in _DEVICE_PRIORITY:
         if dtype in _KNOWN_DEVICES:
@@ -149,4 +206,5 @@ def is_available(device_type: str) -> bool:
     Args:
         device_type: "npu", "gpu", or "cpu"
     """
+    _refresh_known_devices()
     return device_type in _KNOWN_DEVICES
