@@ -213,9 +213,9 @@ Must work from zero to running NPU inference in **< 5 minutes**.
 
 ### Active Context (Updated Each Session)
 
-> **Last updated**: 2026-05-07
-> **Version**: 0.3.0 | **Tests**: 1811 passing / 8 pre-existing | **Source files**: 110 Python modules
-> **Last action**: Made `./install.sh` a true one-step installer — added `--qairt-archive PATH` flag and `scripts/setup_sdk.sh` that tries every legitimate SDK-acquisition strategy in priority order (archive flag → existing env var → discovery → ~/Downloads auto-detect → URL+token for CI mirrors → graceful mock-mode fallback with clear guidance). `activate.sh` now re-resolves the SDK on every shell activation via `sdk_manager`, so updates are picked up without re-running the installer.
+> **Last updated**: 2026-05-08
+> **Version**: 0.3.0 | **Tests**: 2002 passing / 3 skipped / 0 failed | **Source files**: 120+ Python modules
+> **Last action**: Overnight gap-closure session — closed 11 of 17 Tier-1/Tier-2 gaps from `docs/GAP_ANALYSIS.md` plus added a full UX layer (10 Claude Code skills, rich markdown formatters, suggestions engine, contextual tips system, MCP tool response enrichment). 11 phase commits, +191 tests, ~10k lines added. Full progress report at `docs/IMPLEMENTATION_PROGRESS.md`.
 > **Next action**: User downloads QAIRT SDK from <https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk>, runs `./install.sh --qairt-archive ~/Downloads/qairt-X.Y.Z.zip`, then we can land real `QAIRTAdapter` parsers (qairt-converter / snpe-diagview / qnn-platform-validator stdout)
 > **Blockers**: SDK CLI output format needed: (1) qairt-converter stdout on success/failure, (2) snpe-diagview text output schema, (3) qnn-platform-validator stdout
 > **Critical path**: All mock phases ✅ → **Real SDK wiring** (current) → Physical device testing → PyPI release

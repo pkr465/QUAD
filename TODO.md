@@ -1,8 +1,12 @@
 # QUAD — Pending Tasks
 
-> Last updated: 2026-05-07 | Tests: 1811 passing / 8 pre-existing Win32 path-assertion bugs | Version: 0.3.0
+> Last updated: 2026-05-08 | Tests: 2002 passing / 3 skipped / 0 failed | Version: 0.3.0
 >
 > **For the full prioritised gap list, see [`docs/GAP_ANALYSIS.md`](docs/GAP_ANALYSIS.md)** — it's the authoritative reference and includes a tier-by-tier scorecard for every layer of the stack.
+>
+> **Session progress: 11 of 17 Tier-1/Tier-2 gaps fully closed in the
+> overnight gap-closure session.** See [`docs/IMPLEMENTATION_PROGRESS.md`](docs/IMPLEMENTATION_PROGRESS.md) for the
+> per-phase scorecard, what landed, and what's still pending.
 >
 > **Quick start for real hardware:**
 >   1. `quad sdk install <path-to-qairt-archive>`  (download from
