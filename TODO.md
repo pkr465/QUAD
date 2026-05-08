@@ -2,6 +2,8 @@
 
 > Last updated: 2026-05-07 | Tests: 1811 passing / 8 pre-existing Win32 path-assertion bugs | Version: 0.3.0
 >
+> **For the full prioritised gap list, see [`docs/GAP_ANALYSIS.md`](docs/GAP_ANALYSIS.md)** — it's the authoritative reference and includes a tier-by-tier scorecard for every layer of the stack.
+>
 > **Quick start for real hardware:**
 >   1. `quad sdk install <path-to-qairt-archive>`  (download from
 >      <https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk>)
@@ -14,6 +16,48 @@
 > Real CPU inference measured at 388 FPS / 2.56 ms mean / σ=0.95 ms on
 > Oryon (MobileNetV2-1.0, 500 iters via ONNX Runtime CPU EP).
 > NPU section pending QAIRT SDK install on the test laptop.
+
+---
+
+## Tier 1 — End-to-end blockers (from 2026-05-07 gap analysis)
+
+These prevent real-mode from working end-to-end on a developer machine
+even after QAIRT is installed. See `docs/GAP_ANALYSIS.md` for full
+detail on each.
+
+- [ ] **Templates not packaged** — `pyproject.toml` doesn't include `templates/**` in package_data; `pip install` from sdist breaks codegen at runtime (T1.7, ~30 min)
+- [ ] **Generated C++ scaffolds are not compilable** — 9 templates with TODO function bodies in QNN init / load / execute / cleanup; validator only checks bracket balance (T1.8, 2-3 days)
+- [ ] **`QAIRTAdapter.execute_inference` ignores input data** — uses `_create_dummy_input_list` regardless of caller; truncates stdout to 500 chars (T1.4, 1 day)
+- [ ] **`_create_dummy_input_list` always returns `np.random.randn(1,3,224,224)`** — wrong for any model with different input shape; breaks quantization calibration (T2.8, 1 day)
+- [ ] **Inference server `start()` has no HTTP binding** — `src/quad/serve/server.py:335` is a no-op; `infer()` returns `np.random` outputs (T1.2, 1-2 weeks)
+- [ ] **Compiler pipeline returns placeholder bytes** — `src/quad/compiler/pipeline.py:71` writes literal `b"QUAD_COMPILED_BINARY"` instead of real binaries (T1.1, 2-3 weeks)
+- [ ] **Runtime is numpy-backed mocks** — `Device`/`Tensor`/`Model`/`PowerMonitor` don't call SDKs (T1.3, 1-2 weeks; entangled with T1.2)
+- [ ] **No AIMET adapter** — quantization claims are hollow; INT4 path absent entirely (T1.5, 2 weeks)
+- [ ] **No AI Hub adapter** — `qai_hub` SDK never imported anywhere in source (T1.6, 2 weeks)
+
+---
+
+## Tier 2 — Real-mode produces wrong/incomplete output
+
+- [ ] **Latency / per-layer parsers are regex-fragile** — silent fallback to defaults on parse failure (T2.1)
+- [ ] **`detect_hardware` is a hardcoded fallback** — Windows / Android branches not implemented (T2.2)
+- [ ] **`orchestrate_workload` output ignored by codegen** — allocation map is dead-end metadata (T2.3)
+- [ ] **`orchestrate_workload` crashes on linting profiles** — empty `report.layers` not handled (T2.4)
+- [ ] **Phase 2/3 platforms have transport but no adapters** — `LinuxPlatform` / `AndroidPlatform` exist but aren't wired into the factory (T2.5)
+- [ ] **No CI on Windows** — 8 path-assertion failures unfixed; matrix is `ubuntu-latest` only (T2.6)
+- [ ] **Package name mismatch** — `quad-agent` in pyproject vs `qualcomm-ai-toolkit` in README install instructions (T2.7)
+
+---
+
+## Tier 3 — Polish, breadth, error handling
+
+- [ ] Typed exceptions defined but unused — modules throw built-in `RuntimeError`/`ValueError` instead (T3.1)
+- [ ] No auto-generated API docs (mkdocs / sphinx) (T3.2)
+- [ ] Plugins folder incomplete — VS Code partial; Arduino + Android Studio missing (T3.3)
+- [ ] Model registry has no real models — paths point at non-existent files; no `download_model()` (T3.4)
+- [ ] `deploy.sh` is SNPE-only and fragile — hardcoded skel paths, no QNN backend (T3.5)
+- [ ] `quad detect` is a thin mock returning hardcoded device list (T3.6)
+- [ ] `get_supported_ops` is a hardcoded list — doesn't reflect installed SDK version (T3.7)
 
 ---
 
