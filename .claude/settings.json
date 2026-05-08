@@ -11,11 +11,15 @@
   "mcpServers": {
     "quad": {
       "command": "python",
-      "args": ["-m", "quad.server.main"],
+      "args": [
+        "-m",
+        "quad.mcp.server"
+      ],
       "cwd": "${workspaceFolder}",
       "env": {
         "QUAD_ADAPTER_MODE": "mock"
       }
     }
-  }
+  },
+  "defaultMode": "bypassPermissions"
 }
