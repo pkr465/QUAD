@@ -23,7 +23,7 @@
 
 | Platform | Chipset | NPU | Primary SDK | Mock Mode | Real Hardware |
 |----------|---------|-----|-------------|-----------|---------------|
-| AI PC (Windows) | Snapdragon X Elite (X1E-80-100) | 45 TOPS | QNN / QAIRT 2.x | ✅ Ready | ✅ Validated on real hw — see `docs/SAMPLE_APP_REPORT.md` |
+| AI PC (Windows) | Snapdragon X Elite (X1E-80-100) | 45 TOPS | QNN / QAIRT 2.x | ✅ Ready | ✅ CPU validated on Dell Latitude 7455 — see [`docs/SAMPLE_APP_REPORT.md`](docs/SAMPLE_APP_REPORT.md). NPU pending QAIRT SDK install. |
 | Arduino UNO Q (Linux) | QCS2210 (Robotics RB1) | ~1 TOPS DSP | SNPE 2.x | ✅ Ready | Pending physical device |
 | Mobile (Android) | Snapdragon 8 Elite (SM8750) | 48 TOPS | SNPE / QNN 2.x | ✅ Ready | Pending physical device |
 
@@ -52,7 +52,14 @@ machines, macOS, and Linux all work for mock-mode development.
 For **real-hardware mode**, also download the QAIRT SDK once:
 1. Visit <https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk>
 2. Sign in with your Qualcomm developer account, accept the EULA
-3. Download the latest `.zip` (~1 GB) and save it anywhere — you'll point QUAD at it in step 2
+3. Download the latest `.zip` (~1 GB) and save it anywhere — you'll point QUAD at it during install
+
+> **Why doesn't the installer download QAIRT for me?** The Qualcomm developer
+> portal gates downloads behind a developer-account login + per-version EULA
+> acceptance. There is no anonymous direct-download URL, and the installer
+> never bypasses that. For unattended automation (CI), set
+> `QAIRT_DOWNLOAD_URL` and `QAIRT_DOWNLOAD_TOKEN` to a pre-authorised mirror
+> + bearer token; the installer will use those.
 
 ### Fastest path — fresh machine to running QUAD
 
@@ -89,50 +96,12 @@ git clone https://github.com/pkr465/QUAD.git && cd QUAD
 source ./activate.sh && quad mode    # → 'real-mode: READY'
 ```
 
-That's it. Either way, then `./launch.sh` to start the MCP server, or open Claude Code (it auto-detects).
+That's it. Either way, then start the MCP server (see [Run](#run-the-mcp-server-or-a-sample-app)) or open Claude Code (it auto-detects).
 
-### 0. Windows: install bash first (one-time)
+### Other ways to install
 
-QUAD's installer is `install.sh` — a bash script. If you're on a fresh Windows
-machine without Git Bash or WSL, the bootstrap handles this for you:
-
-```powershell
-# From PowerShell — installs Git for Windows (bundles Git Bash) via winget,
-# then re-runs install.sh with the same flags.
-.\bootstrap.ps1                                          # mock-mode setup
-.\bootstrap.ps1 -QairtArchive C:\Downloads\qairt.zip     # real-mode setup
-.\bootstrap.ps1 -MockOnly                                # explicit mock
-.\bootstrap.ps1 -Clean                                   # nuke .venv first
-```
-
-Or from `cmd.exe`:
-
-```cmd
-bootstrap.bat
-bootstrap.bat --qairt-archive "C:\Downloads\qairt.zip"
-bootstrap.bat --mock-only
-bootstrap.bat --clean
-```
-
-If `bootstrap.ps1` won't run because of an execution policy, use `bootstrap.bat`
-(it sets `-ExecutionPolicy Bypass` for you). `bootstrap.bat` automatically
-prefers `pwsh.exe` (PowerShell 7+) over the legacy `powershell.exe` 5.1
-when both are available — `pwsh.exe` has better encoding handling and
-faster startup. Install PowerShell 7 via `winget install Microsoft.PowerShell`
-if you don't have it.
-
-`bootstrap.ps1` is idempotent — safe to re-run; it skips the Git install if
-bash is already available. After it succeeds you have Git Bash + a fully
-configured QUAD install. **macOS / Linux / WSL users skip this step** and
-go straight to step 1.
-
-### 1. Clone
-
-```bash
-git clone https://github.com/pkr465/QUAD.git && cd QUAD
-```
-
-### 2. Install (pick the path that matches you)
+Pick the row that matches your situation. All commands assume you've already
+run `git clone` and `cd QUAD`.
 
 | Situation | Command |
 |---|---|
@@ -140,32 +109,33 @@ git clone https://github.com/pkr465/QUAD.git && cd QUAD
 | Windows — archive already in your Downloads folder | `.\bootstrap.ps1` (auto-detected) |
 | Windows — no SDK available right now (mock-mode dev) | `.\bootstrap.ps1 -MockOnly` |
 | Windows — prefer cmd.exe over PowerShell | `bootstrap.bat --qairt-archive "C:\Users\<you>\Downloads\qairt.zip"` |
+| Windows — full reinstall | `.\bootstrap.ps1 -Clean` (or `bootstrap.bat --clean`) |
 | macOS / Linux / WSL — you downloaded QAIRT | `./install.sh --qairt-archive ~/Downloads/qairt-2.45.0.260326.zip` |
 | macOS / Linux / WSL — archive already in `~/Downloads/` | `./install.sh` (auto-detected) |
 | macOS / Linux / WSL — `QAIRT_SDK_ROOT` already set | `./install.sh` |
 | macOS / Linux / WSL — no SDK available right now | `./install.sh --mock-only` |
 | Any OS — CI mirror with a token | `QAIRT_DOWNLOAD_URL=… QAIRT_DOWNLOAD_TOKEN=… ./install.sh` |
 
-The installer:
-- Creates `.venv/` and installs QUAD with dev extras
-- Unpacks the SDK into the gitignored `./sdks/<flavor>-<version>/`
-- Sets `QAIRT_SDK_ROOT` / `QNN_SDK_ROOT` / `SNPE_ROOT` for the current shell
-- Writes `quad.toml`, `.claude/settings.json` (MCP auto-detect), and `activate.sh`
-- Runs `pytest -q` for verification
-- Always succeeds — falls back to mock mode with clear next-step guidance if no SDK is found
+What every install path does, in order:
 
-### 3. Activate the environment
+1. Creates `.venv/` and installs QUAD with dev extras (`pip install -e .[dev]`)
+2. Acquires the SDK using a six-strategy chain (archive flag → existing
+   env var → `quad sdk discover` of vendor defaults / `./sdks/` →
+   `~/Downloads` auto-detect → `QAIRT_DOWNLOAD_URL` + `QAIRT_DOWNLOAD_TOKEN`
+   → graceful mock-mode fallback)
+3. Unpacks the SDK into the gitignored `./sdks/<flavor>-<version>/`
+4. Sets `QAIRT_SDK_ROOT` / `QNN_SDK_ROOT` / `SNPE_ROOT` for the current shell
+5. Generates `quad.toml`, `.claude/settings.json` (MCP auto-detect), and `activate.sh`
+6. Runs `pytest -q` for verification
+7. Always succeeds — falls back to mock mode with clear next-step guidance if no SDK is found
 
-```bash
-source ./activate.sh        # Re-resolves the SDK every shell start
-```
+On Windows, `bootstrap.ps1` first ensures bash is available (installing
+Git for Windows via `winget` if needed), then hands off to `install.sh`.
+It's idempotent — re-runs are safe and will skip the Git install when bash
+is already present. `bootstrap.bat` is a cmd.exe shim that prefers `pwsh.exe`
+(PowerShell 7+) over `powershell.exe` 5.1 and sets the bypass execution policy.
 
-On Windows in cmd.exe instead of bash:
-```cmd
-.venv\Scripts\activate.bat
-```
-
-### 4. Verify
+### Verify
 
 ```bash
 quad mode                   # → adapter mode + real-mode readiness
@@ -183,25 +153,37 @@ real-mode:       READY
   reason:        Real mode active. SDK root: ./sdks/qairt-2.45.0.260326
 ```
 
-### 5. (Optional) Add the SDK after the fact
+### Add the SDK later (optional)
 
-If you ran `./install.sh --mock-only` first, or downloaded the SDK only after install:
+If you installed in mock mode first and want to enable real hardware afterwards:
 
 ```bash
 quad sdk install ~/Downloads/qairt-2.45.0.260326.zip
-export QUAD_ADAPTER_MODE=real
-quad mode                   # should now report 'real-mode: READY'
+export QUAD_ADAPTER_MODE=real           # bash / Git Bash
+# or in PowerShell: $env:QUAD_ADAPTER_MODE = "real"
+quad mode                                # should now report 'real-mode: READY'
 ```
 
-### 6. Run
+### Run the MCP server or a sample app
 
-#### A. As an MCP server for Claude Code (the typical path)
+#### A. MCP server for Claude Code (the typical path)
 
 ```bash
-./launch.sh
+./launch.sh                              # macOS / Linux / Git Bash on Windows
+./launch.sh --real --verbose             # explicit real mode + debug logs
+./launch.sh --sse                        # SSE transport instead of stdio (for IDE plugins)
 ```
 
-`.claude/settings.json` is generated at install time so Claude Code auto-detects the MCP server with all 5 tools pre-approved. Open Claude Code and ask things like:
+In **PowerShell** (no bash), use the Python module entry point directly:
+
+```powershell
+python -m quad.server                    # equivalent to ./launch.sh
+$env:QUAD_ADAPTER_MODE = "real"; python -m quad.server   # real mode
+```
+
+`.claude/settings.json` is generated at install time so Claude Code
+auto-detects the MCP server with all 5 tools pre-approved. Open Claude Code
+and ask things like:
 
 > "Detect the hardware on this machine."
 > "Convert mobilenetv2.onnx to QNN INT8 and profile it on the NPU."
@@ -216,12 +198,12 @@ quad quickstart
 #### C. Run a benchmark
 
 ```bash
-quad benchmark                       # default model set
-quad benchmark --models mobilenetv2  # specific model
-quad benchmark --device npu          # specific runtime
+quad benchmark                           # default model set (MobileNetV2 / ResNet50 / YOLOv8n)
+quad benchmark --models mobilenetv2      # specific model
+quad benchmark --device npu              # specific runtime
 ```
 
-#### D. End-to-end sample app on real hardware
+#### D. End-to-end sample app with real CPU/NPU measurements
 
 ```bash
 # Install the small extra deps for the sample
@@ -237,7 +219,8 @@ PYTHONUTF8=1 python examples/sample_app_real_hw.py --iterations 500 --warmup 50 
   --json-out examples/run_results.json
 ```
 
-This produces a structured report with real measurements. See [`docs/SAMPLE_APP_REPORT.md`](docs/SAMPLE_APP_REPORT.md) for what the output looks like.
+Produces a structured report with real measurements. See
+[`docs/SAMPLE_APP_REPORT.md`](docs/SAMPLE_APP_REPORT.md) for the format.
 
 ### Troubleshooting
 
@@ -246,17 +229,10 @@ This produces a structured report with real measurements. See [`docs/SAMPLE_APP_
 | `quad mode` says `NOT READY` | Run `quad doctor --real-mode` — it tells you exactly what's missing. |
 | `bootstrap.ps1` won't run (execution policy) | Use `bootstrap.bat` instead, or `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1`. |
 | `bash: command not found` on Windows | Run `bootstrap.ps1` first — it installs Git Bash via winget. |
-| 8 tests fail on Windows | Pre-existing path-assertion bugs in modules unrelated to the install. Doesn't affect anything functional. |
+| `./launch.sh` not found in PowerShell | Use `python -m quad.server` instead, or run launch.sh from Git Bash. |
+| 8 tests fail on Windows | Pre-existing path-assertion bugs in modules unrelated to the install. No functional impact. |
 | SDK installed but not detected | `quad sdk discover` shows what was scanned. The SDK directory must contain `bin/<arch>/qairt-converter` (or `snpe-net-run`). |
-| Auto-download from qualcomm.com? | Not possible — the developer pages gate downloads behind EULA + account auth. Use `QAIRT_DOWNLOAD_URL` + `QAIRT_DOWNLOAD_TOKEN` for CI mirrors with pre-stored tokens. |
-
-> **Why not zero-credential auto-download?** Both Qualcomm developer pages
-> ([QAIRT](https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk),
-> [SNPE](https://www.qualcomm.com/developer/software/neural-processing-sdk-for-ai))
-> gate downloads behind a developer account login + EULA acceptance. There
-> is no anonymous direct-download URL. The installer never bypasses that —
-> the `QAIRT_DOWNLOAD_URL` + `QAIRT_DOWNLOAD_TOKEN` path lets you plug in
-> your own pre-accepted token / mirror once for unattended automation.
+| Want CI / unattended install | Set `QAIRT_DOWNLOAD_URL` + `QAIRT_DOWNLOAD_TOKEN` to a pre-authorised mirror; the installer fetches and unpacks automatically. |
 
 ---
 
@@ -301,7 +277,7 @@ make format         # Auto-format code
 | Tool | Description | Input | Output |
 |------|-------------|-------|--------|
 | `hardware_detect` | Detect chipset, CPU/GPU/NPU topology, memory | platform | Device profile JSON |
-| `convert_model` | Convert ONNX/PyTorch/TF → QNN/SNPE format | model_path, format, quantization, layout | DLC path + conversion notes + image format guidance |
+| `convert_model` | Convert ONNX/PyTorch/TF/TFLite → QNN/SNPE format | model_path, source_format, target_sdk, quantization, layout | Output path (`.bin` for QNN target, `.dlc` for SNPE) + conversion notes + image-format guidance |
 | `profile_workload` | Run profiler (basic/detailed/linting/qhas) | model_path, runtime, profiling_level | Latency/power/memory report + per-op cycle data |
 | `orchestrate_workload` | Allocate ops across CPU/GPU/NPU | model, profile, power_mode | Layer→runtime allocation map |
 | `generate_code` | Emit platform-specific inference code | platform, language, model | Source files + build instructions |
@@ -312,25 +288,23 @@ The MCP server runs `sdk_manager.startup_resolve_and_log()` on every start: it l
 
 ## Real Hardware Mode — Validated on Snapdragon X Elite
 
-The full pipeline has been run end-to-end on a **Dell Latitude 7455 (Snapdragon X Elite X1E80100)**:
+The full pipeline has been run end-to-end on a **Dell Latitude 7455 (Snapdragon X Elite X1E80100, Windows 11 Pro)**:
 
-- 12 Oryon cores @ 4012 MHz · Adreno X1-85 GPU · Hexagon NPU detected (`ComputeAccelerator`, `Status=OK`) · 31.6 GB RAM
-- Real CPU benchmark on Oryon: **MobileNetV2-1.0 @ 388 FPS / 2.56 ms mean / σ=0.95 ms** (500 iters, ONNX Runtime)
-- Memory: 125.8 → 129.6 MB peak (Δ 3.8 MB) · CPU utilisation: 1160% (≈11.6 of 12 logical cores)
-- All 5 MCP tools ran cleanly · QUAD generated valid Windows-on-Snapdragon QNN C++ inference code
+| Metric | Result | Source |
+|---|---|---|
+| CPU mean latency (MobileNetV2-1.0, 500 iters) | **2.56 ms** | ONNX Runtime CPU EP on 12 Oryon cores |
+| Throughput | **388 FPS** | Same |
+| Latency stddev | **0.95 ms** | Same |
+| Memory delta during run | 3.8 MB (125.8 → 129.6 MB peak) | psutil RSS |
+| CPU utilisation | 1160% (≈11.6 of 12 logical cores) | psutil |
+| Hardware detected | Adreno X1-85 GPU · Hexagon NPU (`ComputeAccelerator`, `Status=OK`) · 31.6 GB RAM | Win32 PnP / Get-CimInstance |
+| QUAD pipeline | All 5 MCP tools ran cleanly; valid Windows QNN C++ code generated | `examples/sample_app_real_hw.py` |
 
-Full report with methodology, raw measurements, and reproduction instructions: [**`docs/SAMPLE_APP_REPORT.md`**](docs/SAMPLE_APP_REPORT.md).
+NPU benchmarks are pending — the Hexagon NPU is detected and ready, but
+direct measurement requires the QAIRT SDK install. Full methodology, raw
+data, and reproduction steps: [**`docs/SAMPLE_APP_REPORT.md`**](docs/SAMPLE_APP_REPORT.md).
 Sample app source: [**`examples/sample_app_real_hw.py`**](examples/sample_app_real_hw.py).
-
-To reproduce on your Snapdragon X Elite:
-
-```bash
-./install.sh --qairt-archive ~/Downloads/qairt-2.45.0.260326.zip
-source ./activate.sh
-pip install onnxruntime-qnn psutil
-python -c "import urllib.request; import os; os.makedirs('examples/models', exist_ok=True); urllib.request.urlretrieve('https://github.com/onnx/models/raw/main/validated/vision/classification/mobilenet/model/mobilenetv2-12.onnx', 'examples/models/mobilenetv2-12.onnx')"
-PYTHONUTF8=1 python examples/sample_app_real_hw.py --iterations 500 --warmup 50 --json-out examples/run_results.json
-```
+The reproduction commands are in [Run → D](#d-end-to-end-sample-app-with-real-cpunpu-measurements) above.
 
 ---
 
