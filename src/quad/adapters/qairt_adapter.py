@@ -539,22 +539,48 @@ class QAIRTAdapter(SDKAdapter):
             "stderr": result.stderr[:500] if result.returncode != 0 else "",
         }
 
-    def _create_dummy_input_list(self, model_path: Path) -> str:
-        """Create a temporary input list file for snpe-net-run."""
-        # In production, this would use actual calibration/test data
-        import numpy as np
+    def _create_dummy_input_list(
+        self,
+        model_path: Path,
+        *,
+        num_samples: int = 1,
+        calibration_data: "dict[str, Any] | None" = None,
+    ) -> str:
+        """Create a temporary input list file for snpe-net-run.
 
-        tmp_dir = tempfile.mkdtemp(prefix="quad_input_")
-        # Create a dummy input raw file (224x224x3 float32)
-        dummy_input = np.random.randn(1, 3, 224, 224).astype(np.float32)
-        input_path = os.path.join(tmp_dir, "input.raw")
-        dummy_input.tofile(input_path)
+        Closes GAP_ANALYSIS T2.8: previously every adapter call generated
+        a hardcoded ``np.random.randn(1, 3, 224, 224)`` regardless of the
+        model's actual input shape, which silently broke models with
+        different shapes and pinned quantization calibration to garbage.
 
-        # Write input list
-        list_path = os.path.join(tmp_dir, "input_list.txt")
-        with open(list_path, "w") as f:
-            f.write(f"{input_path}\n")
+        Now: introspect the model (via ``snpe-dlc-info`` for DLC, the
+        ``onnx`` Python module for ONNX) to discover real input shapes,
+        then generate inputs of the right shape and dtype. If
+        ``calibration_data`` is provided (caller has real calibration
+        samples), use those instead of random data.
+        """
+        from quad.adapters.model_inputs import create_input_list_for_model
 
+        list_path, model_io = create_input_list_for_model(
+            model_path,
+            sdk_root=self._sdk_root,
+            num_samples=num_samples,
+            calibration_data=calibration_data,
+        )
+        # Log the introspection source so users can tell which path
+        # produced the inputs (helpful for debugging "why are my
+        # quantization scales wrong?").
+        try:
+            import structlog
+            structlog.get_logger().info(
+                "input_list_created",
+                model_path=str(model_path),
+                source=model_io.source,
+                num_inputs=len(model_io.inputs),
+                num_samples=num_samples,
+            )
+        except Exception:
+            pass
         return list_path
 
     def _parse_latency(self, stdout: str) -> float:
