@@ -91,10 +91,15 @@ class UDOManager:
         return self._mock
 
     def _sdk_bin(self, tool: str) -> str:
-        """Return absolute path to an SDK CLI tool."""
+        """Return absolute path to an SDK CLI tool.
+
+        Uses POSIX path separators so the result is identical on Windows
+        and Linux — the SDK CLI tools that consume these paths
+        ultimately run on POSIX targets (Linux / Android).
+        """
         if self._sdk_root is None:
             return tool  # unreachable in normal mock flow
-        return str(Path(self._sdk_root) / "bin" / tool)
+        return (Path(self._sdk_root) / "bin" / tool).as_posix()
 
     def _run(self, cmd: list[str], cwd: str | None = None) -> str:
         """Execute *cmd*, return combined stdout+stderr."""

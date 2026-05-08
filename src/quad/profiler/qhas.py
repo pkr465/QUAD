@@ -211,13 +211,16 @@ def get_profilelogs_dir(working_dir: str = ".") -> str:
 
     snpe-net-run with --profiling_level qhas writes artifacts to
     ./profilelogs/qnn-profiling-data.log in the current working directory.
+
+    Returns a POSIX-style path (consistent across OS) since the consumer
+    is the SDK tool which runs on POSIX targets.
     """
-    return str(Path(working_dir) / QHAS_PROFILELOGS_DIR)
+    return (Path(working_dir) / QHAS_PROFILELOGS_DIR).as_posix()
 
 
 def get_log_path(working_dir: str = ".") -> str:
-    """Return the full path to the QHAS profiling log file."""
-    return str(Path(working_dir) / QHAS_PROFILELOGS_DIR / QHAS_LOG_FILENAME)
+    """Return the full path to the QHAS profiling log file (POSIX-style)."""
+    return (Path(working_dir) / QHAS_PROFILELOGS_DIR / QHAS_LOG_FILENAME).as_posix()
 
 
 def get_reader_lib_path(sdk_root: str, target: str = "aarch64-android") -> str:
@@ -228,9 +231,9 @@ def get_reader_lib_path(sdk_root: str, target: str = "aarch64-android") -> str:
         target: Target architecture (e.g. 'aarch64-android', 'aarch64-ubuntu-gcc11.4')
 
     Returns:
-        Path to libQnnHtpOptraceProfilingReader.so
+        Path to libQnnHtpOptraceProfilingReader.so (POSIX-style).
     """
-    return str(Path(sdk_root) / "lib" / target / QHAS_READER_LIB)
+    return (Path(sdk_root) / "lib" / target / QHAS_READER_LIB).as_posix()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

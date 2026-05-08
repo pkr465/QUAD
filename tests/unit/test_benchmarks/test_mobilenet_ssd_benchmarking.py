@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -533,6 +534,12 @@ class TestParseBenchmarkJson:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestGetLatestResultsDir:
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="symlink_to() requires SeCreateSymbolicLinkPrivilege on Windows; "
+        "default user accounts don't have it. The fallback path "
+        "(test_falls_back_to_most_recent_dir) covers the same logical branch.",
+    )
     def test_returns_latest_results_symlink_if_exists(self, tmp_path: Path) -> None:
         actual = tmp_path / "20250101_120000"
         actual.mkdir()

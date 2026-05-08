@@ -129,10 +129,15 @@ class ConversionConfig:
 
     @property
     def output_dlc_path(self) -> str:
-        """Determine output .dlc path (auto-generate from model name if not specified)."""
+        """Determine output .dlc path (auto-generate from model name if not specified).
+
+        Always returns a POSIX-style path so the result is identical on
+        Windows and Linux (the path is consumed by SDK tools that
+        ultimately run on POSIX targets).
+        """
         if self.output_path:
             return self.output_path
-        return str(Path(self.model_path).with_suffix(".dlc"))
+        return Path(self.model_path).with_suffix(".dlc").as_posix()
 
     def build_cli_args(self) -> list[str]:
         """Build the complete CLI argument list for the converter.
