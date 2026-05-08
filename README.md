@@ -2,10 +2,11 @@
 
 > Abstracting Qualcomm SDKs, Profilers & Hardware for Accelerated AI Development
 
-[![Status](https://img.shields.io/badge/status-v0.3.0%20Real--HW%20Enabled-green)]()
+[![Status](https://img.shields.io/badge/status-v0.4.0%20Gap--Closure-green)]()
 [![Python](https://img.shields.io/badge/python-3.10+-blue)]()
-[![Tests](https://img.shields.io/badge/tests-1811%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-2002%20passing-brightgreen)]()
 [![MCP](https://img.shields.io/badge/protocol-MCP-purple)]()
+[![Skills](https://img.shields.io/badge/Claude%20Code%20skills-10-blueviolet)]()
 [![License](https://img.shields.io/badge/license-Qualcomm%20Confidential-red)]()
 
 ---
@@ -247,16 +248,17 @@ quad sdk discover               # Scan all standard locations, list every SDK
 quad sdk install <archive>      # Unpack a downloaded archive into ./sdks/
 
 # Diagnostics
-quad doctor                     # 14 environment checks (Python / SDK / tools / DSP)
+quad doctor                     # 16 environment checks (Python / SDK / tools / DSP / AIMET / AI Hub)
 quad doctor --real-mode         # Strict pre-flight; fails on any SDK issue
 
 # Workflow
 quad quickstart                 # Interactive zero-to-inference wizard
 quad benchmark                  # Standard benchmark suite (MobileNetV2 / ResNet / YOLOv8n)
-quad detect                     # Enumerate available CPU/GPU/NPU devices
-quad compile <model>            # Compile ONNX / PyTorch → .qbin
+quad detect                     # Real OS-level probe of CPU/GPU/NPU + RAM + OS
+quad detect --refresh           # Bypass the discovery cache and re-probe
+quad compile <model>            # Compile ONNX / PyTorch → .qbin (frontend real, backend honest stub)
 quad profile <model>            # Run platform profiler
-quad serve <model>              # Start inference server
+quad serve <model>              # Start FastAPI inference server (POST /infer, GET /health, /metrics)
 quad configure                  # Interactive SDK / target-device / API-key wizard
 ```
 
@@ -269,6 +271,37 @@ make test-unit      # Unit tests only
 make lint           # Ruff + mypy
 make format         # Auto-format code
 ```
+
+---
+
+## Claude Code Skills
+
+When you use the QUAD MCP server through Claude Code, ten skill files
+in [`.claude/skills/`](.claude/skills/) route phrases like "what
+hardware do I have?" or "find bottlenecks" to the right MCP tool flow,
+with full handling instructions, edge cases, and follow-up suggestions.
+
+| Skill | Triggered by | What it does |
+|---|---|---|
+| `quad-quickstart` | "get started", "set up QUAD" | End-to-end walkthrough: detect → convert → profile → orchestrate → codegen (8 steps) |
+| `quad-detect` | "what hardware", "is this Snapdragon", "do I have NPU" | Real probe + Qualcomm-vs-other tip routing |
+| `quad-convert` | "convert this model", "quantize", "compile ONNX" | Conversion with calibration data + image format guidance |
+| `quad-profile` | "profile", "measure latency", "find bottlenecks", "QHAS" | Picks the right level (basic/detailed/linting/qhas) + bottleneck callouts |
+| `quad-orchestrate` | "allocate across CPU/GPU/NPU", "compare power modes" | 3-mode comparison + fallback analysis |
+| `quad-codegen` | "generate inference code", "C++ for this model", "Android JNI" | Platform/language/sdk picker + build commands |
+| `quad-doctor` | "is QUAD set up", "diagnose", "why isn't real mode working" | Diagnostic translation table — every check has an exact fix command |
+| `quad-deploy` | "deploy to my phone", "push to Arduino" | `deploy.sh` + remote profiling walkthrough |
+| `quad-recommend` | "what's the best way", "should I use INT4 or INT8", "NPU or GPU" | Synthesises model + target + use case into a categorised plan |
+| `quad-serve` | "start an inference server", "expose as HTTP API" | FastAPI server setup + curl + Python client snippets |
+
+Every MCP tool response now also includes:
+- **`payload["ui"]`** — markdown summary via the matching formatter
+- **`payload["tips"]`** — 2 contextual tips from a 25-entry catalogue
+- **`payload["suggestions"]`** — for `profile_workload`, per-bottleneck Suggestion list
+
+So even without the skill files, Claude Code chats with QUAD render
+rich tables, utilisation bars, and contextual recommendations
+inline rather than raw JSON dumps.
 
 ---
 
@@ -357,14 +390,27 @@ QUAD/
 ├── deploy.sh                     # Deploy model to a target device
 ├── src/quad/
 │   ├── server/                   # FastMCP MCP Agent (5 tools + startup hook)
-│   ├── tools/                    # MCP tool handlers
+│   ├── tools/                    # MCP tool handlers (each enriches with ui+tips+suggestions)
 │   ├── adapters/
 │   │   ├── factory.py            # Mock ↔ Real adapter factory (strict mode, fallback tagging)
 │   │   ├── mock_adapter.py       # Deterministic simulated responses
-│   │   └── qairt_adapter.py      # Real adapter (qairt-converter, snpe-net-run, ...)
+│   │   ├── qairt_adapter.py      # Real adapter (qairt-converter, snpe-net-run, ...)
+│   │   ├── aimet_adapter.py      # ⭐ AIMET PTQ for INT8/INT4 quantization (mock + real-stub)
+│   │   ├── aihub_adapter.py      # ⭐ Qualcomm AI Hub cloud profiling + remote compilation
+│   │   └── model_inputs.py       # ⭐ Model introspection + shape-aware input generation
 │   ├── sdk_manager.py            # ⭐ SDK auto-discovery + zip/tgz install + state tracking
-│   ├── runtime/                  # Device, Tensor, Model, Stream, Memory, Power
-│   ├── compiler/                 # QUAD IR, ONNX frontend, QBin, model_conversion
+│   ├── ui/                       # ⭐ Markdown formatters (rich MCP tool responses)
+│   ├── suggestions.py            # ⭐ Recommendation engine (quantization/runtime/power/optim)
+│   ├── tips.py                   # ⭐ 25-entry contextual tips catalogue
+│   ├── runtime/
+│   │   ├── device.py             # Device list with real local-host probe
+│   │   ├── host_probe.py         # ⭐ Per-OS hardware probe (Win32/procfs/sysctl/adb)
+│   │   └── ...                   # Tensor, Model, Stream, Memory, Power
+│   ├── compiler/
+│   │   ├── pipeline.py           # Honest backend stub + op-coverage in metadata
+│   │   ├── frontend_onnx.py      # Real ONNX → IR (uses onnx Python module)
+│   │   ├── op_coverage.py        # ⭐ Op-coverage report per target backend
+│   │   └── ...                   # QUAD IR, QBin, model_conversion
 │   ├── libs/                     # QualcommDNN + QualcommBLAS
 │   ├── optimizer/                # Graph fusion, DCE, memory planning
 │   ├── profiler/                 # Roofline, kernel, power, memory, linting, QHAS
@@ -385,7 +431,11 @@ QUAD/
 │   ├── benchmarks/               # snpe_bench.py integration, MobilenetSSD
 │   ├── qnn/                      # QNN SDK API reference + inference pipelines
 │   ├── sdk_tools/                # Full SDK tool reference + CLI builders
+│   ├── serve/
+│   │   ├── server.py             # ModelServer (in-process inference engine)
+│   │   └── http.py               # ⭐ FastAPI binding (POST /infer, /health, /metrics)
 │   └── utils/                    # SNPE logging, perf profiles, layer support
+├── .claude/skills/               # ⭐ 10 Claude Code skill files (quad-quickstart, etc.)
 ├── scripts/
 │   ├── helpers.sh                # Shared bash helpers (logging)
 │   ├── setup_sdk.sh              # ⭐ Multi-strategy SDK acquisition (called by install.sh)
@@ -398,9 +448,12 @@ QUAD/
 │   ├── qnn/                      # QNN C++ templates (.so, .bin, TFLite delegate)
 │   ├── windows/                  # Windows C++/Python inference
 │   └── linux/                    # Linux/Arduino Python/sketch inference
-├── tests/                        # 1811 passing (unit + integration + e2e)
+├── tests/                        # 2002 passing / 3 skipped / 0 failed
 │   ├── unit/test_sdk_manager/    # 29 tests for discovery + install + startup
-│   ├── unit/test_adapters/       # Factory, mock, real, dlc-compat, dsp-env
+│   ├── unit/test_adapters/       # Factory, mock, real, dlc-compat, dsp-env, AIMET, AI Hub, model_inputs
+│   ├── unit/test_ui/             # ⭐ Formatters (23) + suggestions (20) + tips (13) — 56 total
+│   ├── unit/test_compiler/       # IR + frontend + op-coverage (168 incl. 22 new for op_coverage)
+│   ├── unit/test_serve/          # FastAPI HTTP + ModelServer
 │   └── ...                       # 100+ test files across all modules
 ├── examples/
 │   ├── sample_app.py             # Mock-mode workflow walkthrough
@@ -409,8 +462,12 @@ QUAD/
 │   ├── generated/                # QUAD-generated inference code (gitignored)
 │   └── run_results.json          # Last sample-app run data
 ├── docs/
-│   ├── REAL_HARDWARE.md          # ⭐ One-step real-mode enablement playbook
-│   ├── SAMPLE_APP_REPORT.md      # ⭐ Real-hardware run report (Snapdragon X Elite)
+│   ├── REAL_HARDWARE.md                     # ⭐ One-step real-mode enablement playbook
+│   ├── SAMPLE_APP_REPORT.md                 # ⭐ Real-hardware run report (Snapdragon X Elite)
+│   ├── GAP_ANALYSIS.md                      # ⭐ End-to-end gap inventory (4 tiers, 17 items)
+│   ├── IMPLEMENTATION_PLAN.md               # ⭐ Phased gap-closure execution plan
+│   ├── IMPLEMENTATION_PROGRESS.md           # ⭐ What landed in the gap-closure session
+│   ├── BACKEND_COMPLETION_DEPENDENCIES.md   # ⭐ T1.1 dependency map (3 implementation paths)
 │   ├── PRD_Qualcomm_DevWorkflows_v3.docx
 │   ├── Design_Document_QUAD_Agent.docx
 │   ├── PREREQUISITES.md
@@ -535,10 +592,10 @@ All major SNPE/QAIRT SDK documentation sections are integrated as structured Pyt
 
 ## Current Status
 
-> **Version**: 0.3.0
-> **Tests**: 1811 passing (8 pre-existing Windows path-assertion bugs; 29 new sdk_manager tests in this release)
-> **Source files**: 110 Python modules
-> **Last Updated**: 2026-05-07
+> **Version**: 0.4.0
+> **Tests**: 2002 passing / 3 skipped / 0 failed (was 1811 / 8 failed before the 2026-05-08 gap-closure session)
+> **Source files**: 120+ Python modules
+> **Last Updated**: 2026-05-08
 
 ### What Works Now
 
@@ -547,21 +604,33 @@ All major SNPE/QAIRT SDK documentation sections are integrated as structured Pyt
 - **MCP server SDK auto-discovery** — env var → quad.toml → `./sdks/` → `~/.quad/sdks` → vendor defaults
 - **`quad mode` / `quad sdk` / `quad doctor --real-mode`** — full visibility into adapter state and SDK readiness
 - **Real Snapdragon X Elite validation** — 388 FPS / 2.56 ms MobileNetV2 on Oryon CPU, full QUAD pipeline runs end-to-end (`docs/SAMPLE_APP_REPORT.md`)
+- **`quad detect`** does real local hardware probing (PowerShell on Windows, `/proc` on Linux, sysctl on macOS, ADB on Android)
+- **Model input introspection** — `convert_model` reads real input shape/dtype from DLC/ONNX (was hardcoded `(1,3,224,224) float32`)
+- **`quad serve`** spins up a real FastAPI server with `/infer`, `/health`, `/metrics`, `/models` endpoints
+- **AIMET adapter** (mock + real-stub) for INT8 / INT4 quantization with calibration data sources
+- **AI Hub adapter** (mock + real `qai_hub` integration) for cloud profiling and remote compilation
+- **Generated Windows C++** has real QNN init / load / execute / cleanup (no more TODO scaffolds)
+- **Honest compiler stub** — no more `b"QUAD_COMPILED_BINARY"` placeholder; emits `BackendNotImplementedError` plus a per-target op-coverage report
+- **Strengthened codegen validator** — TODO/FIXME detection, optional `gcc -fsyntax-only` invocation, string-literal-aware brace counting
+- **10 Claude Code skill files** route user phrases to the right MCP tool flow with rich markdown formatters, contextual tips, and concrete recommendations
+- **Windows CI matrix** — all 8 pre-existing path-assertion failures fixed
 - All SNPE/QAIRT SDK documentation sections integrated as structured Python modules
-- Complete CLI builders for all 18 SDK tools across 6 platforms
-- Architecture Checker and Accuracy Debugger integration
-- QNN SDK API reference with 3-format inference pipeline documentation
+- Complete CLI builders for all 18 SDK tools across 6 platforms (except `qnn-context-binary-generator` — see `docs/BACKEND_COMPLETION_DEPENDENCIES.md`)
 - C++ code generation templates for .so, .bin, and TFLite delegate pipelines
 - VS Code extension scaffold with debug configurations and tasks
 
 ### What Remains
 
-- Real `QAIRTAdapter` output parsers (blocked on `qairt-converter` / `snpe-diagview` / `qnn-platform-validator` stdout format docs)
+See [`docs/IMPLEMENTATION_PROGRESS.md`](docs/IMPLEMENTATION_PROGRESS.md)
+for the per-gap scorecard. Headline pending items:
+
+- **T1.1 — Real compiler backend** — full IR → SDK call → real binary. Three implementation paths catalogued in [`docs/BACKEND_COMPLETION_DEPENDENCIES.md`](docs/BACKEND_COMPLETION_DEPENDENCIES.md); recommend Path A + C in 1 week, Path B as follow-up sprint.
+- **T1.3 — Runtime ctypes/cffi to QNN C API** — `Device.infer` etc. still numpy mocks; full real binding is 1-2 weeks
+- **AIMET real backend** — `_quantize_aimet_torch` / `_quantize_aimet_onnx` raise `NotImplementedError` (full PyTorch model integration is ~2 weeks)
+- **T2.3 — Orchestration → codegen wiring** — allocation map ignored by templates today
+- **T2.5 — Phase 2/3 platform adapters wired** — `LinuxPlatform`/`AndroidPlatform` exist but aren't routed through the factory
+- **T2.7 — Package name decision** — `quad-agent` vs `qualcomm-ai-toolkit` before PyPI publication
 - Physical device testing on Arduino UNO Q (QCS2210) and Snapdragon 8 Elite (SM8750)
-- AIMET INT8 / INT4 quantization integration
-- Qualcomm AI Hub Python SDK integration
-- CI/CD pipeline (GitHub Actions)
-- PyPI publication (`pip install qualcomm-ai-toolkit`)
 
 ---
 
@@ -649,6 +718,10 @@ make lint && make test
 |----------|----------|-------------|
 | Real-Hardware Enablement | [`docs/REAL_HARDWARE.md`](docs/REAL_HARDWARE.md) | One-step setup + 6-strategy SDK acquisition + per-platform notes |
 | Sample-App Run Report | [`docs/SAMPLE_APP_REPORT.md`](docs/SAMPLE_APP_REPORT.md) | Real Snapdragon X Elite measurements, methodology, repro |
+| **Gap Analysis** | [`docs/GAP_ANALYSIS.md`](docs/GAP_ANALYSIS.md) | End-to-end gap inventory with 4-tier severity scorecard |
+| **Implementation Plan** | [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) | Phased gap-closure roadmap (A through G) |
+| **Implementation Progress** | [`docs/IMPLEMENTATION_PROGRESS.md`](docs/IMPLEMENTATION_PROGRESS.md) | What landed in the gap-closure session + closure scorecard |
+| **Backend Dependencies** | [`docs/BACKEND_COMPLETION_DEPENDENCIES.md`](docs/BACKEND_COMPLETION_DEPENDENCIES.md) | Full T1.1 dependency map across 5 categories + 3 implementation paths |
 | Prerequisites | [`docs/PREREQUISITES.md`](docs/PREREQUISITES.md) | SDK, hardware, account requirements |
 | Implementation Guide | [`docs/IMPLEMENTATION_GUIDE.md`](docs/IMPLEMENTATION_GUIDE.md) | Sprint-by-sprint build plan |
 | PRD | `docs/PRD_Qualcomm_DevWorkflows_v3.docx` | Product requirements |
@@ -660,7 +733,45 @@ make lint && make test
 
 ## Changelog
 
-### [0.3.0] — 2026-05-07 — Real-Hardware Enablement (current)
+### [0.4.0] — 2026-05-08 — Gap Closure (current)
+
+The overnight gap-closure session executed Phases A–G from
+[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md): closed
+11 of 17 Tier-1/Tier-2 gaps catalogued in
+[`docs/GAP_ANALYSIS.md`](docs/GAP_ANALYSIS.md), grew the test suite
+from 1811 to 2002 passing, and added a full UX layer.
+
+#### Tier-1 / Tier-2 closures
+- **T1.7** — Templates bundled in wheel via hatch `force-include`; smart resolver chain
+- **T1.8** — Real Windows QNN C++ template (init / load / execute / cleanup); strengthened validator with TODO/FIXME detection + optional `gcc -fsyntax-only`
+- **T1.4** — Real `execute_inference` I/O marshalling (no more 500-char stdout truncation)
+- **T1.5** — AIMET adapter (mock + real-stub) with INT4 per-channel scheme + calibration data sources
+- **T1.6** — AI Hub adapter (mock + real `qai_hub`) for cloud profiling and remote compile
+- **T1.2** — FastAPI inference server: `quad serve` is now a real HTTP service
+- **T1.1** (partial) — Honest backend stub: no more `b"QUAD_COMPILED_BINARY"` placeholder; emits `BackendNotImplementedError` plus per-target op-coverage report
+- **T2.4** — `orchestrate_workload` empty-layers handling (auto-reprofiles in detailed mode)
+- **T2.6** — Windows added to CI matrix; all 8 pre-existing path-assertion failures fixed
+- **T2.8** — Real model-input introspection (`model_inputs.py`) replaces hardcoded `np.random.randn(1,3,224,224)`
+- **T3.6** — `quad detect` does real PowerShell / procfs / sysctl / ADB probes
+
+#### New UX layer (Phase F)
+- **`src/quad/ui/`** — 8 markdown formatters (table, utilization bar, device, profile, conversion, allocation, doctor, coverage, sdk_status)
+- **`src/quad/suggestions.py`** — 5 recommendation generators (quantization, runtime, power_mode, optimisations, suggest_for_workflow)
+- **`src/quad/tips.py`** — 25-entry contextual tips catalogue across 7 contexts
+- **`.claude/skills/`** — 10 Claude Code skill files routing user phrases to MCP tool flows
+- All 5 MCP tools now enrich responses with `payload["ui"]`, `payload["tips"]`, `payload["suggestions"]`
+
+#### New documentation
+- [`docs/GAP_ANALYSIS.md`](docs/GAP_ANALYSIS.md) — 4-tier gap inventory with scorecard
+- [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — phased execution plan
+- [`docs/IMPLEMENTATION_PROGRESS.md`](docs/IMPLEMENTATION_PROGRESS.md) — session deliverable + closure scorecard
+- [`docs/BACKEND_COMPLETION_DEPENDENCIES.md`](docs/BACKEND_COMPLETION_DEPENDENCIES.md) — T1.1 dependency map across 5 categories
+
+#### Test growth
+- 191 new tests across 11 phase commits
+- Final: 2002 passing / 3 skipped / 0 failed (was 1811 / 8 failed)
+
+### [0.3.0] — 2026-05-07 — Real-Hardware Enablement
 
 #### One-step installer
 - `./install.sh --qairt-archive PATH` is now the canonical first-time setup path; the installer creates `.venv/`, unpacks the SDK, sets env vars, generates `quad.toml` + `.claude/settings.json` + `activate.sh`, and runs the test suite — all in one command

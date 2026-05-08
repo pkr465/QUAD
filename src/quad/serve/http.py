@@ -143,7 +143,7 @@ def build_app(server: ModelServer | None = None) -> "_FastAPI":
     app = FastAPI(
         title="QUAD Inference Server",
         description="Production inference server for Qualcomm AI hardware.",
-        version="0.3.0",
+        version="0.4.0",
     )
 
     @app.get("/health", response_model=HealthResponse)

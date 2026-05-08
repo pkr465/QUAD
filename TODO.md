@@ -1,6 +1,6 @@
 # QUAD — Pending Tasks
 
-> Last updated: 2026-05-08 | Tests: 2002 passing / 3 skipped / 0 failed | Version: 0.3.0
+> Last updated: 2026-05-08 | Tests: 2002 passing / 3 skipped / 0 failed | Version: 0.4.0
 >
 > **For the full prioritised gap list, see [`docs/GAP_ANALYSIS.md`](docs/GAP_ANALYSIS.md)** — it's the authoritative reference and includes a tier-by-tier scorecard for every layer of the stack.
 >

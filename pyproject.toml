@@ -1,6 +1,6 @@
 [project]
 name = "quad-agent"
-version = "0.3.0"
+version = "0.4.0"
 description = "QUAD — Qualcomm Unified Agent for Developers. MCP server abstracting Qualcomm SDKs for AI inference workflows."
 requires-python = ">=3.10"
 license = {text = "Proprietary"}
