@@ -206,12 +206,50 @@ def profile(
 
 @app.command()
 def serve(
-    model_path: str = typer.Argument(..., help="Path to compiled .qbin"),
+    model_path: str = typer.Argument(..., help="Path to compiled model (.qbin / .bin / .dlc)"),
+    name: str = typer.Option("default", help="Model name for the /infer endpoint"),
     host: str = typer.Option("0.0.0.0", help="Bind host"),
-    port: int = typer.Option(8000, help="Bind port"),
+    port: int = typer.Option(8080, help="Bind port"),
+    device: str = typer.Option("npu", help="Device for the model (cpu/gpu/npu)"),
 ) -> None:
-    """Start inference server for a compiled model."""
-    typer.echo(f"Serving {model_path} on {host}:{port}...")
+    """Start an HTTP inference server for a compiled model.
+
+    Closes GAP_ANALYSIS T1.2: ``quad serve`` previously only printed
+    a message — now it spins up a real FastAPI app via uvicorn with
+    /infer, /health, /metrics, /models endpoints.
+
+    Requires the [real] extras: ``pip install -e .[real]`` for fastapi
+    + uvicorn (or just ``pip install fastapi uvicorn``).
+    """
+    try:
+        from quad.serve.http import start_http
+        from quad.serve.server import ModelServer
+    except ImportError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Loading {model_path} as model '{name}' on {device}…")
+    server = ModelServer(host=host, port=port)
+    server.start()
+    server.load_model(name, model_path, device=device)
+
+    typer.echo(f"Serving on http://{host}:{port}")
+    typer.echo("Endpoints:")
+    typer.echo("  POST /infer           - run inference")
+    typer.echo("  POST /infer/batch     - batch inference")
+    typer.echo("  GET  /health          - liveness")
+    typer.echo("  GET  /metrics         - perf stats")
+    typer.echo("  GET  /models          - list loaded models")
+    typer.echo("Press Ctrl+C to stop.")
+
+    try:
+        start_http(server, host=host, port=port)
+    except ImportError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+    except KeyboardInterrupt:
+        typer.echo("\nShutting down…")
+        server.stop()
 
 
 @app.command()

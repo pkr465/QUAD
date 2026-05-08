@@ -37,6 +37,9 @@ real = [
     "paramiko>=3.4",
     "pyserial>=3.5",
     "onnx>=1.14",
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
+    "psutil>=5.9",
 ]
 
 [project.scripts]
