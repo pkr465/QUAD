@@ -49,6 +49,32 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/quad"]
 
+# Bundle the top-level templates/ directory inside the wheel as
+# quad/templates/ so CodegenEngine can find Jinja2 templates after a
+# pip-install (without the source tree being present).
+[tool.hatch.build.targets.wheel.force-include]
+"templates" = "src/quad/templates"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/templates",
+    "/configs",
+    "/scripts",
+    "/install.sh",
+    "/setup.sh",
+    "/launch.sh",
+    "/deploy.sh",
+    "/bootstrap.ps1",
+    "/bootstrap.bat",
+    "/Makefile",
+    "/README.md",
+    "/CLAUDE.md",
+    "/TODO.md",
+    "/.env.example",
+    "/docs",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

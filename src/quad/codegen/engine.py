@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -11,18 +12,80 @@ from quad.codegen.validators import validate_output
 from quad.exceptions import TemplateRenderError, UnsupportedLanguageError
 from quad.models.codegen import GeneratedCode
 
+logger = logging.getLogger(__name__)
+
+
+def resolve_template_dir(template_dir: str | Path | None = None) -> Path:
+    """Find the templates directory.
+
+    Resolution order:
+      1. Explicit ``template_dir`` argument (if provided and exists)
+      2. ``<quad-package-dir>/templates`` — populated by hatch
+         ``force-include`` when the package is installed via pip
+      3. ``<repo-root>/templates`` — for source-tree development where
+         the package is installed in editable mode without re-bundling
+      4. ``./templates`` relative to the current working directory
+         — last-resort fallback for ad-hoc usage
+
+    Raises ``FileNotFoundError`` if nothing resolves.
+    """
+    candidates: list[Path] = []
+    if template_dir:
+        candidates.append(Path(template_dir))
+
+    # Bundled-with-package location (force-included by hatch)
+    try:
+        import quad
+        candidates.append(Path(quad.__file__).resolve().parent / "templates")
+    except Exception:
+        pass
+
+    # Source-tree fallback: walk up from this file looking for templates/
+    here = Path(__file__).resolve()
+    for parent in [here.parent, *here.parents]:
+        candidates.append(parent / "templates")
+        if parent.name == "src":
+            candidates.append(parent.parent / "templates")
+            break
+
+    # CWD fallback
+    candidates.append(Path.cwd() / "templates")
+
+    for cand in candidates:
+        if cand.is_dir() and any(cand.rglob("*.j2")):
+            return cand
+
+    tried = "\n  ".join(str(c) for c in candidates)
+    raise FileNotFoundError(
+        f"Could not locate templates directory containing *.j2 files. Tried:\n  {tried}\n"
+        "If you installed via pip, this likely means templates were not bundled in the wheel — "
+        "ensure pyproject.toml has [tool.hatch.build.targets.wheel.force-include]."
+    )
+
 
 class CodegenEngine:
     """Renders platform/language-specific inference code from Jinja2 templates."""
 
-    def __init__(self, template_dir: str | Path = "templates"):
-        self._template_dir = Path(template_dir)
+    def __init__(self, template_dir: str | Path | None = None):
+        # If template_dir is explicit, use it directly. If None or
+        # missing, fall back to the resolver chain so installed and
+        # source-tree usage both work out of the box.
+        if template_dir is not None and Path(template_dir).is_dir():
+            self._template_dir = Path(template_dir).resolve()
+        else:
+            self._template_dir = resolve_template_dir(template_dir)
+        logger.debug("codegen_engine_template_dir", extra={"path": str(self._template_dir)})
         self._env = Environment(
             loader=FileSystemLoader(str(self._template_dir)),
             trim_blocks=True,
             lstrip_blocks=True,
             keep_trailing_newline=True,
         )
+
+    @property
+    def template_dir(self) -> Path:
+        """The resolved templates directory in use."""
+        return self._template_dir
 
     def render(
         self,
