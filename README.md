@@ -34,6 +34,19 @@
 
 ## Quick Start — One Command
 
+### Prerequisites (one-time, per machine)
+
+| OS | What you need before `git clone` |
+|---|---|
+| **Windows** | Nothing — `bootstrap.ps1` installs Git for Windows. Python 3.10+ from the Microsoft Store or `winget install Python.Python.3.12`. PowerShell 7 recommended (`winget install Microsoft.PowerShell`); 5.1 also works. |
+| **macOS** | Python 3.10+ (`brew install python@3.12`). bash 4+ (`brew install bash` if on default 3.2). |
+| **Linux** | Python 3.10+ (`apt install python3.10` / `dnf install python3.12`). bash already present. |
+
+For **real-hardware mode**, also download the QAIRT SDK once:
+1. Visit <https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk>
+2. Sign in with your Qualcomm developer account, accept the EULA
+3. Download the latest `.zip` (~1 GB) and save it anywhere — you'll point QUAD at it in step 2
+
 ### Fastest path — three commands, fresh machine, real hardware
 
 ```bash
@@ -47,19 +60,6 @@ source ./activate.sh && quad mode      # → 'real-mode: READY'
 ```
 
 That's it. Then `./launch.sh` to start the MCP server, or open Claude Code (it auto-detects).
-
-### Prerequisites (one-time, per machine)
-
-| OS | What you need before `git clone` |
-|---|---|
-| **Windows** | Nothing — `bootstrap.ps1` installs Git for Windows. Python 3.10+ from the Microsoft Store or `winget install Python.Python.3.12`. PowerShell 7 recommended (`winget install Microsoft.PowerShell`); 5.1 also works. |
-| **macOS** | Python 3.10+ (`brew install python@3.12`). bash 4+ (`brew install bash` if on default 3.2). |
-| **Linux** | Python 3.10+ (`apt install python3.10` / `dnf install python3.12`). bash already present. |
-
-For **real-hardware mode**, also download the QAIRT SDK once:
-1. Visit <https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk>
-2. Sign in with your Qualcomm developer account, accept the EULA
-3. Download the latest `.zip` (~1 GB) and save it anywhere — you'll point QUAD at it in step 2
 
 ### 0. Windows: install bash first (one-time)
 
