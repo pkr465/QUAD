@@ -191,8 +191,15 @@ fi
 if [ -f "$SCRIPT_DIR/.claude/settings.json" ]; then
     log_ok ".claude/settings.json (MCP auto-detection)"
 else
-    mkdir -p "$SCRIPT_DIR/.claude"
-    cat > "$SCRIPT_DIR/.claude/settings.json" << 'SETTINGS'
+    # Delegate to `quad client install` — single source of truth for the
+    # Claude Code provisioning. This also installs the bundled skills.
+    if python -m quad.cli.main client install --client claude_code 2>/dev/null; then
+        log_ok "Provisioned Claude Code client (settings.json + skills)"
+    else
+        # Fallback for the very first bootstrap (before the package is
+        # importable) — write a minimal settings.json by hand.
+        mkdir -p "$SCRIPT_DIR/.claude"
+        cat > "$SCRIPT_DIR/.claude/settings.json" << 'SETTINGS'
 {
   "permissions": {
     "allow": [
@@ -206,7 +213,7 @@ else
   "mcpServers": {
     "quad": {
       "command": "python",
-      "args": ["-m", "quad.server.main"],
+      "args": ["-m", "quad.mcp.server"],
       "cwd": "${workspaceFolder}",
       "env": {
         "QUAD_ADAPTER_MODE": "mock"
@@ -215,7 +222,9 @@ else
   }
 }
 SETTINGS
-    log_ok "Created .claude/settings.json"
+        log_warn "quad client install failed — wrote a minimal .claude/settings.json fallback"
+        log_warn "Run 'quad client install --force' once the package is importable to also install skills"
+    fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════

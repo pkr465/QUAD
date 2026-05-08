@@ -390,6 +390,110 @@ def sdk_discover() -> None:
     typer.echo("(* = the one QUAD will use — first match wins)")
 
 
+client_app = typer.Typer(
+    name="client",
+    help="Manage IDE/agent client provisioning (.claude/settings.json + skills).",
+    no_args_is_help=True,
+)
+app.add_typer(client_app)
+
+
+@client_app.command("install")
+def client_install(
+    client: str = typer.Option("claude_code", help="Which MCP client to install for"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing files"),
+    adapter_mode: str = typer.Option("mock", help="Adapter mode written into settings.json"),
+) -> None:
+    """Install MCP client config + skills under the current project.
+
+    For Claude Code: writes ``.claude/settings.json`` and copies the
+    bundled skill files into ``.claude/skills/``. The MCP server
+    itself is not affected.
+    """
+    from pathlib import Path
+
+    from quad.client import get_provisioner
+
+    try:
+        prov = get_provisioner(client)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=2)
+
+    result = prov.install(Path.cwd(), force=force, adapter_mode=adapter_mode)
+    typer.echo(f"Provisioned {result.client} client at {result.settings_path}")
+    typer.echo(f"  Skills:    {result.skills_dir}")
+    typer.echo(f"  Written:   {len(result.files_written)} file(s)")
+    if result.files_skipped:
+        typer.echo(f"  Skipped:   {len(result.files_skipped)} file(s) (use --force to overwrite)")
+    for note in result.notes:
+        typer.echo(f"  Note: {note}")
+
+
+@client_app.command("uninstall")
+def client_uninstall(
+    client: str = typer.Option("claude_code", help="Which MCP client to uninstall"),
+) -> None:
+    """Remove the bundled client config + skills."""
+    from pathlib import Path
+
+    from quad.client import get_provisioner
+
+    try:
+        prov = get_provisioner(client)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=2)
+
+    result = prov.uninstall(Path.cwd())
+    typer.echo(f"Uninstalled {result.client} from {result.skills_dir}")
+    for note in result.notes:
+        typer.echo(f"  {note}")
+
+
+@client_app.command("status")
+def client_status(
+    client: str = typer.Option("claude_code", help="Which MCP client to check"),
+) -> None:
+    """Show what's currently installed for a given client."""
+    from pathlib import Path
+
+    from quad.client import get_provisioner
+
+    try:
+        prov = get_provisioner(client)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=2)
+
+    s = prov.status(Path.cwd())
+    typer.echo(f"Client:           {s['client']}")
+    typer.echo(f"settings.json:    {'present' if s['settings_exists'] else 'missing'} @ {s['settings_path']}")
+    typer.echo(f"Skills dir:       {'present' if s['skills_dir_exists'] else 'missing'} @ {s['skills_dir']}")
+    typer.echo(f"Bundled skills:   {s['bundled_skill_count']}")
+    typer.echo(f"Installed skills: {s['installed_skill_count']}")
+    if s["missing_skills"]:
+        typer.echo(f"Missing:          {', '.join(s['missing_skills'])}")
+    if s["extra_user_skills"]:
+        typer.echo(f"User-added:       {', '.join(s['extra_user_skills'])}")
+
+
+@client_app.command("preview")
+def client_preview(
+    client: str = typer.Option("claude_code", help="Which MCP client config to preview"),
+    adapter_mode: str = typer.Option("mock", help="Adapter mode token to render"),
+) -> None:
+    """Print the settings.json content that ``install`` would write."""
+    if client != "claude_code":
+        typer.echo("preview is currently only supported for client=claude_code", err=True)
+        raise typer.Exit(code=2)
+
+    from quad.client.claude_code import ClaudeCodeProvisioner
+
+    prov = ClaudeCodeProvisioner()
+    typer.echo(prov.render_settings_preview(adapter_mode=adapter_mode))
+
+
 @sdk_app.command("install")
 def sdk_install(
     archive: str = typer.Argument(
