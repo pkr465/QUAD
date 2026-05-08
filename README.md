@@ -34,7 +34,7 @@
 
 ## Quick Start — One Command
 
-### TL;DR — three commands, fresh machine, real hardware
+### Fastest path — three commands, fresh machine, real hardware
 
 ```bash
 git clone https://github.com/pkr465/QUAD.git && cd QUAD
