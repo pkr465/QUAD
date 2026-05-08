@@ -35,6 +35,24 @@
 
 ## Quick Start — One Command
 
+### Pick your deployment topology first
+
+QUAD has a separate **server** (heavy: SDK + adapters + compiler) and
+**client** (light: just Claude Code provisioning + 5 MB of deps). Pick
+the topology that matches you:
+
+| Topology | Server install | Client install |
+|---|---|---|
+| **Local dev** (one machine, default) | `./install.sh` (does both) | _(included in install.sh)_ |
+| **Lightweight laptop + lab machine over SSH** | `./install.sh --server-only` on lab | `./install-client.sh --transport=stdio-ssh ...` on laptop |
+| **IDE laptop + hosted MCP service** | _(operator-managed)_ | `./install-client.sh --transport=sse-http ...` |
+| **CI runner** | `./install.sh --server-only --mock-only` | _(not needed)_ |
+
+Detailed walkthroughs:
+- [`docs/CLIENT_INSTALL.md`](docs/CLIENT_INSTALL.md) — IDE-machine setup (any transport)
+- [`docs/SERVER_INSTALL.md`](docs/SERVER_INSTALL.md) — server-machine setup
+- [`docs/CLIENT_SERVER_ARCHITECTURE.md`](docs/CLIENT_SERVER_ARCHITECTURE.md) — internal architecture
+
 ### Prerequisites (one-time, per machine)
 
 **Recommended hardware: a Snapdragon X-series Copilot+ PC** —
@@ -716,6 +734,9 @@ make lint && make test
 
 | Document | Location | Description |
 |----------|----------|-------------|
+| **Server Install** | [`docs/SERVER_INSTALL.md`](docs/SERVER_INSTALL.md) | Full QUAD MCP server + SDK + adapters install |
+| **Client Install** | [`docs/CLIENT_INSTALL.md`](docs/CLIENT_INSTALL.md) | Lightweight Claude Code provisioning (3 transport options) |
+| Client/Server Architecture | [`docs/CLIENT_SERVER_ARCHITECTURE.md`](docs/CLIENT_SERVER_ARCHITECTURE.md) | Layering, separation of concerns, residual gaps |
 | Real-Hardware Enablement | [`docs/REAL_HARDWARE.md`](docs/REAL_HARDWARE.md) | One-step setup + 6-strategy SDK acquisition + per-platform notes |
 | Sample-App Run Report | [`docs/SAMPLE_APP_REPORT.md`](docs/SAMPLE_APP_REPORT.md) | Real Snapdragon X Elite measurements, methodology, repro |
 | **Gap Analysis** | [`docs/GAP_ANALYSIS.md`](docs/GAP_ANALYSIS.md) | End-to-end gap inventory with 4-tier severity scorecard |

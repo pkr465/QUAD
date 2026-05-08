@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from quad.client import MCPClientProvisioner, ProvisionResult
 from quad.client.claude_code.settings import (
     DEFAULT_PERMISSIONS,
     build_settings,
     render_to_json,
+    settings_template,
+    settings_template_sse,
+    settings_template_ssh,
     write_settings,
 )
 from quad.client.claude_code.skills import (
@@ -23,6 +27,63 @@ from quad.client.claude_code.skills import (
 CLAUDE_DIR_NAME = ".claude"
 SETTINGS_FILE = "settings.json"
 SKILLS_DIR = "skills"
+
+
+Transport = Literal["stdio-local", "stdio-ssh", "sse-http"]
+
+
+@dataclass
+class TransportConfig:
+    """Where the MCP server lives + how Claude Code reaches it."""
+
+    transport: Transport = "stdio-local"
+
+    # stdio-local
+    server_command: str = "python"
+    server_args: list[str] = field(default_factory=lambda: ["-m", "quad.mcp.server"])
+    cwd: str = "${workspaceFolder}"
+
+    # stdio-ssh
+    ssh_user: str = ""
+    ssh_host: str = ""
+    ssh_port: int = 22
+    ssh_key: str | None = None
+    ssh_server_command: str = "python -m quad.mcp.server"
+
+    # sse-http
+    sse_url: str = ""
+    sse_auth_token_env: str | None = None
+
+    # common
+    adapter_mode: str = "mock"
+    permissions: tuple[str, ...] = DEFAULT_PERMISSIONS
+
+    def to_settings(self) -> dict[str, Any]:
+        """Render the appropriate settings.json shape for this transport."""
+        if self.transport == "stdio-local":
+            return settings_template(
+                server_command=self.server_command,
+                server_args=self.server_args,
+                cwd=self.cwd,
+                adapter_mode=self.adapter_mode,
+                permissions=self.permissions,
+            )
+        if self.transport == "stdio-ssh":
+            return settings_template_ssh(
+                ssh_user=self.ssh_user,
+                ssh_host=self.ssh_host,
+                ssh_port=self.ssh_port,
+                ssh_key=self.ssh_key,
+                server_command=self.ssh_server_command,
+                permissions=self.permissions,
+            )
+        if self.transport == "sse-http":
+            return settings_template_sse(
+                url=self.sse_url,
+                auth_token_env=self.sse_auth_token_env,
+                permissions=self.permissions,
+            )
+        raise ValueError(f"Unknown transport: {self.transport!r}")
 
 
 class ClaudeCodeProvisioner(MCPClientProvisioner):
@@ -50,7 +111,19 @@ class ClaudeCodeProvisioner(MCPClientProvisioner):
         force: bool = False,
         adapter_mode: str = "mock",
         permissions: tuple[str, ...] | None = None,
+        transport_config: TransportConfig | None = None,
     ) -> ProvisionResult:
+        """Install Claude Code config + skills.
+
+        Args:
+            project_root: directory under which ``.claude/`` is created
+            force: overwrite existing settings.json + skills
+            adapter_mode: ``mock`` or ``real`` (only used for stdio-local)
+            permissions: pre-approved MCP tool names
+            transport_config: full transport spec; if None, defaults to
+                stdio-local with ``adapter_mode``. For SSH/SSE servers,
+                the caller MUST pass an explicit TransportConfig.
+        """
         claude_dir = project_root / CLAUDE_DIR_NAME
         settings_path = claude_dir / SETTINGS_FILE
         skills_target = claude_dir / SKILLS_DIR
@@ -61,13 +134,16 @@ class ClaudeCodeProvisioner(MCPClientProvisioner):
             skills_dir=str(skills_target),
         )
 
-        # 1. settings.json
-        settings_written = write_settings(
-            settings_path,
-            force=force,
-            adapter_mode=adapter_mode,
-            permissions=permissions or DEFAULT_PERMISSIONS,
-        )
+        # 1. settings.json — pick the shape based on transport
+        if transport_config is None:
+            settings = build_settings(
+                adapter_mode=adapter_mode,
+                permissions=permissions or DEFAULT_PERMISSIONS,
+            )
+        else:
+            settings = transport_config.to_settings()
+
+        settings_written = write_settings(settings_path, settings=settings, force=force)
         if settings_written:
             result.files_written.append(str(settings_path))
         else:

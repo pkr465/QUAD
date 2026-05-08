@@ -17,6 +17,8 @@ from quad.client.claude_code.settings import (
     DEFAULT_PERMISSIONS,
     build_settings,
     settings_template,
+    settings_template_ssh,
+    settings_template_sse,
 )
 from quad.client.claude_code.skills import (
     bundled_skills_dir,
@@ -29,6 +31,8 @@ __all__ = [
     "DEFAULT_PERMISSIONS",
     "build_settings",
     "settings_template",
+    "settings_template_ssh",
+    "settings_template_sse",
     "bundled_skills_dir",
     "install_skills",
     "list_bundled_skills",

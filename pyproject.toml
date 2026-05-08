@@ -42,8 +42,24 @@ real = [
     "psutil>=5.9",
 ]
 
+# Lightweight client-only dependencies. Used by install-client.sh on the
+# developer's IDE machine when the MCP server runs elsewhere. Does NOT
+# install fastmcp / jinja2 / structlog / numpy / pydantic-settings —
+# those are only needed by the server.
+#
+# Install via:
+#     pip install quad-agent[client]
+# or use install-client.sh which does it for you.
+client = [
+    "typer>=0.12",
+    "httpx>=0.27",
+]
+
 [project.scripts]
 quad-server = "quad.server.main:cli"
+# Lightweight client CLI. Does not import the heavy quad.cli.main module
+# so importing quad-client doesn't pull adapters / runtime / compiler.
+quad-client = "quad.client.cli:cli"
 
 [build-system]
 requires = ["hatchling"]

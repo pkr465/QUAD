@@ -43,6 +43,7 @@ MOCK_ONLY=false
 SKIP_TESTS=false
 CLEAN_VENV=false
 INSTALL_REAL_EXTRAS=false
+SERVER_ONLY=false
 ADAPTERS_LIST="qairt,qnn,hexagon,target,udo"  # Default: all
 QAIRT_ARCHIVE=""
 
@@ -52,6 +53,7 @@ while [[ $# -gt 0 ]]; do
         --skip-tests)     SKIP_TESTS=true; shift ;;
         --clean)          CLEAN_VENV=true; shift ;;
         --real)           INSTALL_REAL_EXTRAS=true; shift ;;
+        --server-only)    SERVER_ONLY=true; shift ;;
         --adapters)       ADAPTERS_LIST="$2"; shift 2 ;;
         --qairt-archive)  QAIRT_ARCHIVE="$2"; shift 2 ;;
         --help|-h)
@@ -65,6 +67,9 @@ while [[ $# -gt 0 ]]; do
             echo "                         (.zip / .tar.gz / .tgz) — recommended for first-time"
             echo "                         setup with the developer-portal download."
             echo "  --mock-only            Skip SDK setup; install QUAD in mock mode only."
+            echo "  --server-only          Install QUAD server only (skip Claude Code .claude/"
+            echo "                         settings.json + skills provisioning). Pair with"
+            echo "                         install-client.sh on the IDE machine for split deploys."
             echo "  --real                 Also install real-hardware Python extras"
             echo "                         (asyncssh, paramiko, onnx — for remote-target deploys)"
             echo "  --clean                Remove existing .venv/ before creating (full reinstall)"
@@ -188,7 +193,13 @@ else
     log_ok "quad.toml exists"
 fi
 
-if [ -f "$SCRIPT_DIR/.claude/settings.json" ]; then
+if [ "$SERVER_ONLY" = true ]; then
+    log_info "--server-only: skipping client provisioning."
+    log_info "  To set up Claude Code on this machine later:"
+    log_info "    quad-client install --transport=stdio-local"
+    log_info "  Or on a different (lightweight) machine:"
+    log_info "    ./install-client.sh --transport=stdio-ssh --ssh-host=<this-machine>"
+elif [ -f "$SCRIPT_DIR/.claude/settings.json" ]; then
     log_ok ".claude/settings.json (MCP auto-detection)"
 else
     # Delegate to `quad client install` — single source of truth for the
