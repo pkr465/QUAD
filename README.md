@@ -36,9 +36,16 @@
 
 ### Prerequisites (one-time, per machine)
 
+**Recommended hardware: a Snapdragon X-series Copilot+ PC** —
+Snapdragon X / X Elite / X2 Elite. These ship with the Hexagon NPU
+that real-mode targets (45+ TOPS). Tested examples: Dell Latitude 7455,
+Lenovo ThinkPad T14s Gen 6, Microsoft Surface Pro 11 / Laptop 7,
+HP OmniBook X, Samsung Galaxy Book4 Edge. Other x86_64 Windows
+machines, macOS, and Linux all work for mock-mode development.
+
 | OS | What you need before `git clone` |
 |---|---|
-| **Windows** | Nothing — `bootstrap.ps1` installs Git for Windows. Python 3.10+ from the Microsoft Store or `winget install Python.Python.3.12`. PowerShell 7 recommended (`winget install Microsoft.PowerShell`); 5.1 also works. |
+| **Windows (default)** | Nothing — `bootstrap.ps1` installs Git for Windows. Python 3.10+ from the Microsoft Store (or `winget install Python.Python.3.12`). PowerShell 7 recommended (`winget install Microsoft.PowerShell`); 5.1 also works. |
 | **macOS** | Python 3.10+ (`brew install python@3.12`). bash 4+ (`brew install bash` if on default 3.2). |
 | **Linux** | Python 3.10+ (`apt install python3.10` / `dnf install python3.12`). bash already present. |
 
@@ -47,19 +54,42 @@ For **real-hardware mode**, also download the QAIRT SDK once:
 2. Sign in with your Qualcomm developer account, accept the EULA
 3. Download the latest `.zip` (~1 GB) and save it anywhere — you'll point QUAD at it in step 2
 
-### Fastest path — three commands, fresh machine, real hardware
+### Fastest path — fresh machine to running QUAD
+
+#### Windows (default — Snapdragon X / X Elite / X2 Elite Copilot+ PC)
+
+In **PowerShell**, from anywhere you want to clone the repo:
+
+```powershell
+git clone https://github.com/pkr465/QUAD.git
+cd QUAD
+.\bootstrap.ps1 -QairtArchive C:\Users\<you>\Downloads\qairt-2.45.0.260326.zip
+```
+
+`bootstrap.ps1` installs Git Bash if needed, then runs the bash installer.
+After it finishes, **open a new Git Bash window** (recommended — `source ./activate.sh`
+is a bash command) and:
+
+```bash
+cd /c/path/to/QUAD          # use the path you cloned to
+source ./activate.sh
+quad mode                    # → 'real-mode: READY'
+```
+
+If you prefer to stay in PowerShell, you can activate the Python venv directly
+(`.venv\Scripts\Activate.ps1`) and call `quad mode` — the SDK was already
+discovered and recorded in `.quad/sdk.json` by the bootstrap, so it'll be
+picked up automatically.
+
+#### macOS / Linux / WSL
 
 ```bash
 git clone https://github.com/pkr465/QUAD.git && cd QUAD
-
-# Windows:    .\bootstrap.ps1 -QairtArchive C:\Downloads\qairt.zip
-# Mac/Linux:  ./install.sh --qairt-archive ~/Downloads/qairt.zip
 ./install.sh --qairt-archive ~/Downloads/qairt-2.45.0.260326.zip
-
-source ./activate.sh && quad mode      # → 'real-mode: READY'
+source ./activate.sh && quad mode    # → 'real-mode: READY'
 ```
 
-That's it. Then `./launch.sh` to start the MCP server, or open Claude Code (it auto-detects).
+That's it. Either way, then `./launch.sh` to start the MCP server, or open Claude Code (it auto-detects).
 
 ### 0. Windows: install bash first (one-time)
 
@@ -106,12 +136,15 @@ git clone https://github.com/pkr465/QUAD.git && cd QUAD
 
 | Situation | Command |
 |---|---|
-| You already downloaded QAIRT from the developer portal | `./install.sh --qairt-archive ~/Downloads/qairt-2.45.0.260326.zip` |
-| Archive is already in `~/Downloads/` | `./install.sh` (auto-detected) |
-| `QAIRT_SDK_ROOT` already set, or SDK at vendor default path | `./install.sh` |
-| You have a CI mirror with a token | `QAIRT_DOWNLOAD_URL=… QAIRT_DOWNLOAD_TOKEN=… ./install.sh` |
-| No SDK available right now (still want to develop) | `./install.sh --mock-only` |
-| Windows without bash | `.\bootstrap.ps1` (see step 0 above) |
+| **Windows (default)** — you downloaded QAIRT from the developer portal | `.\bootstrap.ps1 -QairtArchive C:\Users\<you>\Downloads\qairt-2.45.0.260326.zip` |
+| Windows — archive already in your Downloads folder | `.\bootstrap.ps1` (auto-detected) |
+| Windows — no SDK available right now (mock-mode dev) | `.\bootstrap.ps1 -MockOnly` |
+| Windows — prefer cmd.exe over PowerShell | `bootstrap.bat --qairt-archive "C:\Users\<you>\Downloads\qairt.zip"` |
+| macOS / Linux / WSL — you downloaded QAIRT | `./install.sh --qairt-archive ~/Downloads/qairt-2.45.0.260326.zip` |
+| macOS / Linux / WSL — archive already in `~/Downloads/` | `./install.sh` (auto-detected) |
+| macOS / Linux / WSL — `QAIRT_SDK_ROOT` already set | `./install.sh` |
+| macOS / Linux / WSL — no SDK available right now | `./install.sh --mock-only` |
+| Any OS — CI mirror with a token | `QAIRT_DOWNLOAD_URL=… QAIRT_DOWNLOAD_TOKEN=… ./install.sh` |
 
 The installer:
 - Creates `.venv/` and installs QUAD with dev extras
