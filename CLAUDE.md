@@ -119,7 +119,7 @@ Runtime (Phase B) → Libraries (Phase C) → Serve (Phase F) → Ecosystem (Pha
 ### Success Metric
 
 ```
-pip install qualcomm-ai-toolkit && quad quickstart
+pip install quad-agent && quad quickstart
 ```
 Must work from zero to running NPU inference in **< 5 minutes**.
 
@@ -219,7 +219,7 @@ Must work from zero to running NPU inference in **< 5 minutes**.
 > **Next action**: User downloads QAIRT SDK from <https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk>, runs `./install.sh --qairt-archive ~/Downloads/qairt-X.Y.Z.zip`, then we can land real `QAIRTAdapter` parsers (qairt-converter / snpe-diagview / qnn-platform-validator stdout)
 > **Blockers**: SDK CLI output format needed: (1) qairt-converter stdout on success/failure, (2) snpe-diagview text output schema, (3) qnn-platform-validator stdout
 > **Critical path**: All mock phases ✅ → **Real SDK wiring** (current) → Physical device testing → PyPI release
-> **Success metric**: `pip install qualcomm-ai-toolkit && quad quickstart` in < 5 minutes on real hardware
+> **Success metric**: `pip install quad-agent && quad quickstart` in < 5 minutes on real hardware
 > **What works now**: Full mock-mode platform (1715 tests), all SDK doc sections integrated as structured Python modules, complete CLI builders for all 18 SDK tools, C++ code gen templates for QNN .so/.bin/.tflite pipelines
 > **Decisions made**:
 > - QUAD = full computing platform (not just MCP agent wrapper)

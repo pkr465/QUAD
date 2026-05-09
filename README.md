@@ -651,7 +651,7 @@ for the per-gap scorecard. Headline pending items:
 - **AIMET real backend** — `_quantize_aimet_torch` / `_quantize_aimet_onnx` raise `NotImplementedError` (full PyTorch model integration is ~2 weeks)
 - **T2.3 — Orchestration → codegen wiring** — allocation map ignored by templates today
 - **T2.5 — Phase 2/3 platform adapters wired** — `LinuxPlatform`/`AndroidPlatform` exist but aren't routed through the factory
-- **T2.7 — Package name decision** — `quad-agent` vs `qualcomm-ai-toolkit` before PyPI publication
+- ~~T2.7 — Package name decision~~ **Resolved**: published as `quad-agent` (matches pyproject.toml and the in-tree `quad-server` / `quad-client` console scripts)
 - Physical device testing on Arduino UNO Q (QCS2210) and Snapdragon 8 Elite (SM8750)
 
 ---

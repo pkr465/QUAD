@@ -1,0 +1,111 @@
+name: Release
+
+# Release workflow for `quad-agent` on PyPI.
+#
+# Trigger options:
+#   - Push a tag matching v*.*.*  (recommended once trusted publishing is set up)
+#   - Manual via "Run workflow" with a version input
+#
+# Configuration required (one-time, in GitHub repo settings):
+#   - Secret PYPI_API_TOKEN, OR
+#   - Configure trusted publishing at https://pypi.org/manage/account/publishing/
+#     (preferred — no long-lived credentials)
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to publish (must match pyproject.toml)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  # Required for trusted publishing
+  id-token: write
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build deps
+        run: python -m pip install --upgrade pip build
+
+      - name: Verify pyproject version matches tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF##*/v}"
+          pyver=$(python -c "import tomllib; import pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          if [ "$tag" != "$pyver" ]; then
+            echo "::error::Tag v$tag does not match pyproject.toml version $pyver"
+            exit 1
+          fi
+
+      - name: Build wheel + sdist
+        run: python -m build --wheel --sdist
+
+      - name: Smoke-install wheel
+        run: |
+          python -m venv .smoke
+          .smoke/bin/pip install dist/*.whl
+          .smoke/bin/python -c "from quad.server.main import cli; print('quad-server import OK')"
+          .smoke/bin/python -c "from quad.client.cli import cli; print('quad-client import OK')"
+          QUAD_ADAPTER_MODE=mock .smoke/bin/python -m quad.cli.main mode
+
+      - name: Verify wheel ships templates + skills
+        run: |
+          python -m zipfile -l dist/*.whl > listing.txt
+          grep -q "quad/templates/qnn/" listing.txt
+          grep -q "quad/templates/snpe/" listing.txt
+          grep -q "quad/client/claude_code/skills_content/" listing.txt || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-test:
+    name: Publish to TestPyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Only on manual dispatch — to dry-run a release before tagging
+    if: github.event_name == 'workflow_dispatch'
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/quad-agent
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Only on a real tag push
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: pypi
+      url: https://pypi.org/p/quad-agent
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

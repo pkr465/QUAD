@@ -57,7 +57,7 @@ scope below. Closed items are kept here struck-through for history.
 - [ ] **`orchestrate_workload` output ignored by codegen** — allocation map is dead-end metadata (T2.3)
 - [ ] **`orchestrate_workload` crashes on linting profiles** — empty `report.layers` not handled (T2.4)
 - [ ] **Phase 2/3 platforms have transport but no adapters** — `LinuxPlatform` / `AndroidPlatform` exist but aren't wired into the factory (T2.5)
-- [ ] **Package name mismatch** — `quad-agent` in pyproject vs `qualcomm-ai-toolkit` in README install instructions (T2.7) — Sprint 5 target
+- [x] ~~Package name mismatch~~ (Sprint 5: settled on `quad-agent`; CLAUDE.md success-metric updated; release.yml and real-hw.yml workflows added)
 
 ---
 

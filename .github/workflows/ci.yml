@@ -94,8 +94,12 @@ jobs:
           python -m venv .smoke
           .smoke/bin/python -m pip install --upgrade pip
           .smoke/bin/pip install dist/*.whl
-          # Verify both entry points are reachable and the CLI runs
-          .smoke/bin/quad-server --help || true
+          # quad-server is a long-running FastMCP server entrypoint, so we
+          # can't `--help` it without it sitting on stdio. Verify it imports
+          # cleanly instead.
+          .smoke/bin/python -c "from quad.server.main import cli; print('quad-server entry OK')"
+          .smoke/bin/python -c "from quad.client.cli import cli; print('quad-client entry OK')"
+          # Run the lightweight CLI to confirm the package is fully wired
           QUAD_ADAPTER_MODE=mock .smoke/bin/python -m quad.cli.main mode
 
       - name: Upload distribution artifacts
