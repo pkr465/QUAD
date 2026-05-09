@@ -62,6 +62,9 @@ def compile_model(
     *,
     allow_placeholder_backend: bool | None = None,
     coverage_only: bool = False,
+    backend: Literal["auto", "qairt", "stub"] = "auto",
+    quantization: Literal["fp32", "int8", "int4"] = "fp32",
+    use_cache: bool = True,
 ) -> QBin:
     """Compile a model to QUAD binary format.
 
@@ -137,15 +140,61 @@ def compile_model(
         "coverage": {target: report.to_dict() for target, report in coverage_reports.items()},
     }
 
-    # Step 5: Backend — emit placeholder OR raise honestly
+    # Step 5: Backend — three paths:
+    #   - portable / coverage_only: skip the backend entirely
+    #   - backend="qairt" (or "auto" with SDK reachable): real qairt-converter
+    #   - backend="stub" (or "auto" without SDK): placeholder/honest-error
     if portable or coverage_only:
-        # Portable / coverage-only: skip backend entirely
         pass
     else:
+        from quad.compiler.qairt_backend import (
+            compile_with_qairt,
+            is_qairt_available,
+        )
+
         if allow_placeholder_backend is None:
             allow_placeholder_backend = _placeholder_backend_allowed()
 
-        if allow_placeholder_backend:
+        # Choose a backend: explicit overrides > auto > stub
+        chosen_backend = backend
+        if chosen_backend == "auto":
+            chosen_backend = "qairt" if is_qairt_available() else "stub"
+
+        if chosen_backend == "qairt":
+            # Real backend — shell out via the QAIRTAdapter for each
+            # target. We currently support ONNX as the source format;
+            # the converter accepts other formats too but they need the
+            # right ConversionRequest fields wired through.
+            if path.suffix.lower() != ".onnx":
+                raise BackendNotImplementedError(
+                    f"QAIRT backend currently supports .onnx sources only "
+                    f"(got {path.suffix!r}). Use coverage_only=True or "
+                    "convert via QAIRTAdapter.convert_model directly."
+                )
+            for cap in target_caps:
+                # NPU/HTP -> qnn target SDK; everything else -> snpe DLC.
+                target_sdk = "qnn" if "npu" in cap.name.lower() or "htp" in cap.name.lower() else "snpe"
+                result = compile_with_qairt(
+                    str(path),
+                    target_sdk=target_sdk,
+                    quantization=quantization,
+                    use_cache=use_cache,
+                )
+                qbin.add_target(
+                    target=cap.name,
+                    format=target_sdk,
+                    data=result.binary,
+                )
+                qbin.metadata.setdefault("qairt_backend", {})[cap.name] = {
+                    "target_sdk": result.target_sdk,
+                    "quantization": result.quantization,
+                    "binary_format": result.binary_format,
+                    "binary_size_bytes": len(result.binary),
+                    "cache_hit": result.cache_hit,
+                    "supported_ops_pct": result.supported_ops_pct,
+                    "duration_s": round(result.duration_s, 3),
+                }
+        elif allow_placeholder_backend:
             for cap in target_caps:
                 qbin.add_target(
                     target=cap.name,
@@ -153,18 +202,17 @@ def compile_model(
                     data=b"QUAD_COMPILED_BINARY",  # Legacy placeholder
                 )
         else:
-            # Honest stub: refuse to fabricate binary content. Users
-            # who need real binaries should call into QAIRTAdapter.
-            # convert_model directly, which shells out to the SDK.
             raise BackendNotImplementedError(
                 f"Backend SDK call to compile IR -> binary is not yet wired for "
                 f"target(s) {[c.name for c in target_caps]}. Options:\n"
-                f"  1. Use QAIRTAdapter.convert_model() to invoke the QAIRT SDK "
-                "tools directly (qairt-converter / qairt-quantizer).\n"
-                "  2. Pass coverage_only=True to skip the backend and get just "
+                f"  1. Install QAIRT (quad sdk install <archive>) so the auto "
+                "backend picks the real qairt-converter path.\n"
+                f"  2. Use QAIRTAdapter.convert_model() to invoke the SDK "
+                "tools directly.\n"
+                "  3. Pass coverage_only=True to skip the backend and get just "
                 "the IR + op-coverage report.\n"
-                "  3. Pass portable=True to package only the QIR (JIT at load).\n"
-                "  4. Set QUAD_PLACEHOLDER_BACKEND=1 to opt into the legacy "
+                "  4. Pass portable=True to package only the QIR (JIT at load).\n"
+                "  5. Set QUAD_PLACEHOLDER_BACKEND=1 to opt into the legacy "
                 "placeholder bytes (testing only)."
             )
 
