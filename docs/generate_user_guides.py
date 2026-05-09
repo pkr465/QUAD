@@ -758,6 +758,40 @@ python -c "from quad.compiler.qairt_backend import clear_cache; print(clear_cach
         ["quad-client", "Lightweight client provisioner (in QUAD-Client)"],
     ])
 
+    # ─── 19. IoT Device Support ───────────────────────────────────────────
+    h1(doc, "19. IoT Device Support")
+    p(doc, "QUAD's adapter pattern extends from AI PC and Mobile to the full "
+           "Qualcomm IoT SoC line. The full dependency catalogue (111 components "
+           "across 14 categories) is published as a workbook at "
+           "docs/IOT_DEPENDENCIES.xlsx. This section is a quick orientation; the "
+           "workbook is authoritative.")
+
+    h2(doc, "19.1  Target hardware")
+    table(doc, ["Class", "SoC / Board", "Where it fits"], [
+        ["Edge gateway",         "QCS6490 (RB3 Gen 2), QCS8250 (RB5)",  "Linux-class IoT, 12+ TOPS NPU"],
+        ["High-perf IoT / AI",   "QCS8550",                              "Industrial AI, smart camera"],
+        ["Camera / vision IoT",  "QCS610 / QCS605",                      "Smart camera, AI vision"],
+        ["Entry IoT",            "QCM2290 / QCS2290",                    "Wearables, smart speakers"],
+        ["Cellular IoT",         "Snapdragon X75 / 9205 modem",          "5G / NB-IoT / LTE-M uplink"],
+    ])
+
+    h2(doc, "19.2  Software dependency layers")
+    table(doc, ["Layer", "What QUAD needs"], [
+        ["OS / Firmware",        "Yocto meta-qcom, Qualcomm Linux, Zephyr / FreeRTOS, U-Boot, TF-A, OP-TEE"],
+        ["Connectivity",         "BlueZ, OpenThread, Matter 1.4, hostapd, ModemManager + libqmi/libmbim"],
+        ["IoT protocols",        "MQTT (Mosquitto / paho), CoAP (libcoap / aiocoap), LwM2M (Anjay), OPC-UA"],
+        ["Cloud + OTA",          "AWS IoT Device SDK v2, azure-iot-device, Greengrass, IoT Edge, Mender, RAUC, SWUpdate"],
+        ["Security",             "Qualcomm QTEE / SPU, OP-TEE, mbedTLS, OpenSSL, TF-M, PKCS#11, Matter Attestation"],
+        ["Edge AI runtime",      "QNN / QAIRT 2.x, SNPE 2.x, Hexagon SDK 5.x, AIMET, Qualcomm AI Hub"],
+        ["Sensors / HAL",        "libgpiod, smbus2, spidev, pyserial, python-can, pymodbus, bleak"],
+        ["Telemetry",            "OpenTelemetry, Prometheus client_python, Fluent Bit"],
+    ])
+
+    callout(doc, "Open docs/IOT_DEPENDENCIES.xlsx for the full per-component "
+                 "catalogue with priority (P1 / P2 / P3), license, target version, "
+                 "and source URL. Filter by Category to scope a specific sub-stack.",
+                 "tip")
+
     # ─── End ──────────────────────────────────────────────────────────────
     doc.add_page_break()
     h1(doc, "Reference Documents")
@@ -766,6 +800,7 @@ python -c "from quad.compiler.qairt_backend import clear_cache; print(clear_cach
         "docs/REAL_HARDWARE.md — one-step real-mode enablement playbook",
         "docs/REAL_HARDWARE_CI.md — self-hosted runner setup",
         "docs/SAMPLE_APP_REPORT.md — Snapdragon X Elite measurements",
+        "docs/IOT_DEPENDENCIES.xlsx — IoT device support catalogue (111 components)",
         "tests/e2e/test_real_sdk_e2e.py — the canonical 7-phase e2e validation",
         "QUAD_Client_Guide.docx (companion) — the developer-facing client guide",
     ])
@@ -1130,6 +1165,13 @@ pip uninstall quad-mcp-client
            "isn't reachable, with a tagged warning. Check `quad doctor "
            "--real-mode` on the server side to see why.")
 
+    h3(doc, "Does QUAD-Client work with Qualcomm IoT boards (RB3 Gen 2 / RB5)?")
+    p(doc, "Yes — QUAD-Client is transport-agnostic. Point it at a server running "
+           "on the IoT board (or on a workstation that talks to it over SSH / "
+           "ADB / serial). The five MCP tools work identically; the server-side "
+           "adapters handle the SoC-specific bits. The full IoT dependency "
+           "catalogue lives in the QUAD repo at docs/IOT_DEPENDENCIES.xlsx.")
+
     h1(doc, "Reference")
     bullets(doc, [
         "QUAD_Server_Guide.docx — the operator-facing companion",
@@ -1137,6 +1179,7 @@ pip uninstall quad-mcp-client
         "docs/TRANSPORTS.md — protocol details for each transport",
         "docs/TROUBLESHOOTING.md — full error catalogue",
         "docs/DEVELOPER_GUIDE.md — adding new IDE clients, contributing",
+        "QUAD repo → docs/IOT_DEPENDENCIES.xlsx — IoT device support catalogue",
     ])
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

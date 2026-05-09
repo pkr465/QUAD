@@ -9,6 +9,7 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.section import WD_ORIENT
 from docx.oxml.ns import qn, nsdecls
 from docx.oxml import parse_xml
+from pathlib import Path
 import os
 
 # Colors
@@ -217,7 +218,7 @@ run.font.color.rgb = RGBColor(0xDD, 0xDD, 0xDD)
 run.font.size = Pt(8)
 
 # Date and classification
-add_formatted_paragraph(doc, "April 2026  |  Qualcomm Internal",
+add_formatted_paragraph(doc, "May 2026  |  Qualcomm Internal",
                         font_size=11, color=MEDIUM_GRAY,
                         alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=36)
 
@@ -405,7 +406,7 @@ stats_table = doc.add_table(rows=1, cols=4)
 stats_table.alignment = WD_TABLE_ALIGNMENT.CENTER
 remove_table_borders(stats_table)
 
-stats = [("933", "Tests Passing"), ("15", "Modules"), ("30+", "Templates"), ("15,000+", "Lines of Code")]
+stats = [("2002", "Tests Passing"), ("120+", "Python Modules"), ("30+", "Templates"), ("25,000+", "Lines of Code")]
 for i, (num, label) in enumerate(stats):
     cell = stats_table.rows[0].cells[i]
     set_cell_shading(cell, STAT_BOX_BG)
@@ -453,7 +454,7 @@ for r_idx, row_data in enumerate(modules):
 
 add_formatted_paragraph(doc, "", space_after=18)
 add_formatted_paragraph(doc,
-    "All modules working in mock mode. Real SDK adapter ready \u2014 blocked only on SDK CLI documentation access.",
+    "All seven platform phases (A\u2013G) complete in mock mode. Real SDK adapter ready \u2014 blocked only on SDK CLI documentation access.",
     font_size=11, italic=True, color=MEDIUM_GRAY,
     alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=12)
 
@@ -646,6 +647,67 @@ add_formatted_paragraph(doc,
 add_page_break(doc)
 
 # ============================================================
+# PAGE 8b: IoT DEVICE SUPPORT (New)
+# ============================================================
+
+add_section_title(doc, "8a. IoT Device Support")
+
+add_formatted_paragraph(doc, "Extending QUAD across the full Qualcomm IoT portfolio",
+                        font_size=13, bold=True, color=DARK_GRAY,
+                        space_before=12, space_after=12)
+
+add_formatted_paragraph(doc,
+    "QUAD's adapter pattern is being extended to cover Qualcomm's IoT SoC family \u2014 "
+    "from Linux-class gateways down to RTOS companion cores. The full dependency "
+    "catalog (111 components across 14 categories) lives at docs/IOT_DEPENDENCIES.xlsx.",
+    font_size=11, color=DARK_GRAY, space_after=12)
+
+iot_table_data = [
+    ["Layer", "Coverage", "Examples"],
+    ["IoT SoCs", "Reference + dev kits", "QCS6490 (RB3 Gen 2), QCS8550, QCS8250 (RB5), QCS610"],
+    ["OS / Firmware", "Linux + RTOS", "Yocto meta-qcom, Qualcomm Linux, Zephyr, FreeRTOS, U-Boot, OP-TEE"],
+    ["Connectivity", "Wireless + cellular", "BlueZ, OpenThread, Matter 1.4, hostapd, ModemManager (NB-IoT, LTE-M, 5G via X75)"],
+    ["IoT Protocols", "App-layer", "MQTT (Mosquitto/paho), CoAP (libcoap/aiocoap), LwM2M (Anjay), OPC-UA"],
+    ["Cloud + OTA", "Vendor SDKs", "AWS IoT v2, Azure IoT, Greengrass, IoT Edge, Mender, RAUC, SWUpdate"],
+    ["Security", "Hardware + software", "QTEE / SPU, OP-TEE, mbedTLS, TF-M, PKCS#11, Matter Attestation"],
+    ["Edge AI", "Existing QUAD stack", "QNN/QAIRT 2.x, SNPE 2.x, Hexagon SDK 5, AIMET, AI Hub"],
+]
+
+iot_table = doc.add_table(rows=len(iot_table_data), cols=3)
+iot_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+set_table_light_borders(iot_table)
+
+for i, h in enumerate(iot_table_data[0]):
+    style_table_cell(iot_table.rows[0].cells[i], h, bold=True, color=WHITE,
+                     font_size=10, alignment=WD_ALIGN_PARAGRAPH.CENTER,
+                     bg_color=TABLE_HEADER_BG)
+
+for r_idx in range(1, len(iot_table_data)):
+    bg = TABLE_ALT_ROW_BG if r_idx % 2 == 1 else None
+    style_table_cell(iot_table.rows[r_idx].cells[0], iot_table_data[r_idx][0],
+                     bold=True, color=QUALCOMM_BLUE, bg_color=bg)
+    style_table_cell(iot_table.rows[r_idx].cells[1], iot_table_data[r_idx][1],
+                     color=DARK_GRAY, bg_color=bg)
+    style_table_cell(iot_table.rows[r_idx].cells[2], iot_table_data[r_idx][2],
+                     color=MEDIUM_GRAY, bg_color=bg)
+
+for cell in iot_table.columns[0].cells:
+    cell.width = Cm(3.0)
+for cell in iot_table.columns[1].cells:
+    cell.width = Cm(4.5)
+for cell in iot_table.columns[2].cells:
+    cell.width = Cm(9.0)
+
+add_formatted_paragraph(doc, "", space_after=18)
+add_formatted_paragraph(doc,
+    "Same Python adapter, same MCP tools, same natural-language UX \u2014 extended from "
+    "AI PC / Mobile to the full Qualcomm IoT SoC line.",
+    font_size=11, italic=True, color=QUALCOMM_BLUE,
+    alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=12)
+
+add_page_break(doc)
+
+# ============================================================
 # PAGE 9: THE ASK
 # ============================================================
 
@@ -657,8 +719,8 @@ add_formatted_paragraph(doc, "", space_after=18)
 asks = [
     ("1. QNN SDK Documentation Access",
      "Unblocks the real hardware adapter in 2\u20133 days. The mock framework is complete; we need only the official API surface to wire in real inference."),
-    ("2. Hardware: 3 Target Devices",
-     "Snapdragon X Elite (AI PC), Arduino UNO Q (IoT), and Snapdragon 8 Elite (Mobile). These cover all three target segments."),
+    ("2. Hardware: 4 Target Device Classes",
+     "Snapdragon X Elite (AI PC), Snapdragon 8 Elite (Mobile), Arduino UNO Q (entry IoT), and a Qualcomm IoT SoC kit (RB3 Gen 2 / RB5 / QCS6490 / QCS8550). These cover all four go-to-market segments. Full IoT dependency catalog: docs/IOT_DEPENDENCIES.xlsx."),
     ("3. Engineering Team: 12\u201315 Engineers over 12 Months",
      "To achieve CUDA platform parity across compiler, runtime, libraries, and ecosystem tooling."),
 ]
@@ -761,7 +823,7 @@ run.font.color.rgb = RGBColor(0xDD, 0xDD, 0xDD)
 run.font.size = Pt(8)
 
 add_formatted_paragraph(doc,
-    "QUAD  |  Qualcomm Internal  |  April 2026",
+    "QUAD  |  Qualcomm Internal  |  May 2026",
     font_size=10, color=LIGHT_GRAY,
     alignment=WD_ALIGN_PARAGRAPH.CENTER)
 
@@ -769,7 +831,7 @@ add_formatted_paragraph(doc,
 # SAVE
 # ============================================================
 
-output_path = "/Users/pavanr/work/05/QUAD/docs/QUAD_Executive_Pitch.docx"
+output_path = str(Path(__file__).resolve().parent / "QUAD_Executive_Pitch.docx")
 doc.save(output_path)
 print(f"Document saved to: {output_path}")
 print(f"File size: {os.path.getsize(output_path) / 1024:.1f} KB")

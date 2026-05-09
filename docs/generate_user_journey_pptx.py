@@ -6,6 +6,7 @@ from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE
+from pathlib import Path
 import os
 
 # Constants
@@ -25,7 +26,7 @@ SUBTITLE_SIZE = Pt(14)
 SLIDE_WIDTH = Inches(13.333)
 SLIDE_HEIGHT = Inches(7.5)
 
-OUTPUT_PATH = "/Users/pavanr/work/05/QUAD/docs/QUAD_User_Journey.pptx"
+OUTPUT_PATH = str(Path(__file__).resolve().parent / "QUAD_User_Journey.pptx")
 
 
 def create_presentation():
@@ -59,11 +60,11 @@ def create_presentation():
         bullets=[
             "./install.sh \u2014 installs everything in 3 minutes",
             "What happens: Python venv, QUAD package, SDK download, VS Code setup, tests verified",
-            "Result: 933 tests pass, Claude Code auto-detects MCP server",
+            "Result: 2002 tests pass, Claude Code auto-detects MCP server",
             "No manual SDK download needed",
         ],
         slide_num=3,
-        code_snippet="$ ./install.sh\n\u2713 Python venv created\n\u2713 QUAD installed\n\u2713 QNN SDK downloaded\n\u2713 933 tests passed",
+        code_snippet="$ ./install.sh\n\u2713 Python venv created\n\u2713 QUAD installed\n\u2713 QNN SDK downloaded\n\u2713 2002 tests passed",
     )
 
     # Slide 4: Configuration
@@ -133,7 +134,7 @@ def create_presentation():
             "  Step 4: Retrieve results",
         ],
         slide_num=8,
-        footer_note="Supports: Windows (local), Linux (SSH), Android (ADB)",
+        footer_note="Supports: Windows (local), Linux (SSH), Android (ADB), Qualcomm IoT (RB3 Gen 2 / RB5)",
     )
 
     # Slide 9: Production Serving
@@ -157,7 +158,8 @@ def create_presentation():
             "PSNPE: parallel inference across NPU cores",
             "Custom kernels: @quad.kernel Python DSL \u2192 Hexagon",
             "Multi-model pipelines (detection + classification + segmentation)",
-            "Fleet management for IoT/edge deployment",
+            "IoT fleet rollout: QCS6490 / QCS8550 / RB3 Gen 2 / RB5 \u2014 see docs/IOT_DEPENDENCIES.xlsx",
+            "OTA via Mender / RAUC; MQTT + CoAP + LwM2M telemetry to AWS / Azure IoT",
         ],
         slide_num=10,
     )
@@ -257,7 +259,7 @@ def create_title_slide(prs, layout):
     txBox = slide.shapes.add_textbox(left, top, Inches(4), Inches(0.5))
     tf = txBox.text_frame
     p = tf.paragraphs[0]
-    p.text = "April 2026"
+    p.text = "May 2026"
     p.font.size = Pt(16)
     p.font.color.rgb = GRAY_TEXT
     p.font.name = BODY_FONT
