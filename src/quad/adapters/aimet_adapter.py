@@ -116,7 +116,7 @@ class QuantizationResult:
     accuracy_drop_estimate_pct: float = 0.0
     weight_size_compression: float = 1.0
     duration_s: float = 0.0
-    backend: Literal["aimet_torch", "aimet_onnx", "mock"] = "mock"
+    backend: Literal["aimet_torch", "aimet_onnx", "qairt_quantizer", "mock"] = "mock"
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -167,14 +167,43 @@ def aimet_onnx_available() -> bool:
         return False
 
 
+def qairt_quantizer_available() -> bool:
+    """True if the SDK's ``qairt-quantizer`` is reachable.
+
+    Distinct from AIMET: qairt-quantizer is bundled with QAIRT and
+    performs INT8 / INT4 quantization via the SDK's own calibration
+    pipeline. Less flexible than AIMET (no QAT, no per-layer overrides
+    via Python) but doesn't require the Qualcomm-specific aimet-torch
+    or aimet-onnx wheels.
+    """
+    if not (
+        os.environ.get("QAIRT_SDK_ROOT")
+        or os.environ.get("QNN_SDK_ROOT")
+        or os.environ.get("SNPE_ROOT")
+    ):
+        return False
+    try:
+        from quad.sdk_manager import resolve_sdk_root
+        info = resolve_sdk_root()
+        return bool(info and info.has_qairt_converter)
+    except Exception:
+        return False
+
+
 def select_backend(prefer: str = "auto") -> str:
-    """Pick the most-suitable AIMET backend.
+    """Pick the most-suitable quantization backend.
 
     Args:
-        prefer: 'auto' | 'aimet_torch' | 'aimet_onnx' | 'mock'
+        prefer: 'auto' | 'aimet_torch' | 'aimet_onnx' | 'qairt_quantizer' | 'mock'
 
     Returns:
-        Backend identifier — one of 'aimet_torch' / 'aimet_onnx' / 'mock'.
+        Backend identifier.
+
+    Resolution order for 'auto':
+        1. aimet_torch (best — full PyTorch PTQ + QAT)
+        2. aimet_onnx  (good — ONNX-only PTQ)
+        3. qairt_quantizer (decent — SDK's built-in PTQ, INT8/INT4)
+        4. mock
     """
     env_override = os.environ.get("QUAD_AIMET_BACKEND", "").strip().lower()
     if env_override:
@@ -190,11 +219,17 @@ def select_backend(prefer: str = "auto") -> str:
         if aimet_onnx_available():
             return "aimet_onnx"
         raise AIMETUnavailableError("aimet_onnx")
-    # auto
+    if prefer == "qairt_quantizer":
+        if qairt_quantizer_available():
+            return "qairt_quantizer"
+        raise AIMETUnavailableError("qairt_quantizer")
+    # auto — pick the best installed
     if aimet_torch_available():
         return "aimet_torch"
     if aimet_onnx_available():
         return "aimet_onnx"
+    if qairt_quantizer_available():
+        return "qairt_quantizer"
     return "mock"
 
 
@@ -344,6 +379,161 @@ def _quantize_mock(
     )
 
 
+# ─── qairt_quantizer backend (SDK-bundled, real) ─────────────────────────────
+
+
+def _quantize_qairt_quantizer(
+    model_path: Path,
+    output_path: Path,
+    config: QuantizationConfig,
+    calibration: Any,
+) -> QuantizationResult:
+    """Real quantization via the SDK's ``qairt-quantizer`` tool.
+
+    This runs the SAME workflow as ``QAIRTAdapter.convert_model(quantization='int8')``,
+    but exposed under the AIMETAdapter facade so callers can choose
+    quantization-only without going through the converter front. Uses
+    ``model_inputs.create_input_list_for_model`` so the input list reflects
+    the model's real input shapes (no more 1×3×224×224 hardcode).
+
+    Args:
+        model_path: source ``.dlc`` (or ``.onnx`` — the function will
+            convert to .dlc first via qairt-converter).
+        output_path: target quantized ``.dlc``.
+        config: ``QuantizationConfig`` — bitwidth + scheme. INT8 maps to
+            qairt-quantizer's default; INT4 enables block-quantization.
+        calibration: optional list/dir/iterable of calibration arrays.
+            When None, real shape-aware random data is generated.
+
+    Raises:
+        AIMETUnavailableError: when qairt-quantizer can't be located.
+        QuantizationError: when the subprocess fails.
+    """
+    import asyncio
+    import shutil as _shutil
+    import time as _time
+
+    from quad.adapters.qairt_adapter import _find_tool, _run_command
+    from quad.adapters.model_inputs import create_input_list_for_model
+
+    started = _time.perf_counter()
+
+    src = Path(model_path)
+    if not src.exists():
+        raise QuantizationError(f"Source model not found: {src}")
+
+    # Step 1: ensure we have a .dlc (qairt-quantizer's input format).
+    # If the source is .onnx, convert it first.
+    if src.suffix.lower() == ".onnx":
+        # Use the existing QAIRTAdapter to convert ONNX -> DLC (no quant).
+        from quad.adapters.qairt_adapter import QAIRTAdapter
+        from quad.models.conversion import ConversionRequest
+
+        adapter = QAIRTAdapter()
+        fp32_request = ConversionRequest(
+            source_format="onnx",
+            model_path=str(src),
+            target_sdk="snpe",  # qairt-quantizer wants .dlc
+            quantization="fp32",
+        )
+        result = asyncio.run(adapter.convert_model(fp32_request))
+        intermediate_dlc = Path(result.output_path)
+    elif src.suffix.lower() == ".dlc":
+        intermediate_dlc = src
+    else:
+        raise QuantizationError(
+            f"qairt_quantizer backend supports .onnx and .dlc sources; got {src.suffix!r}"
+        )
+
+    # Step 2: build a real input_list with model-shape-aware calibration data.
+    # If the caller supplied calibration arrays, write them out; otherwise
+    # let create_input_list_for_model generate random samples of the right shape.
+    cal_dir = output_path.parent / f"_calibration_{src.stem}"
+    cal_dir.mkdir(parents=True, exist_ok=True)
+    cal_dict: dict[str, np.ndarray] | None = None
+    if calibration is not None:
+        # First batch only — qairt-quantizer accepts more samples via
+        # the input list; we use one for simplicity. Production callers
+        # should pass a directory of calibration .npy files.
+        first_batch = next(_iterate_calibration(
+            calibration,
+            num_samples=config.calibration_samples,
+        ), None)
+        if first_batch is not None:
+            cal_dict = first_batch
+
+    list_path, _model_io = create_input_list_for_model(
+        intermediate_dlc,
+        num_samples=min(config.calibration_samples, 50),  # cap subprocess input
+        calibration_data=cal_dict,
+    )
+
+    # Step 3: invoke qairt-quantizer
+    try:
+        tool = _find_tool("qairt-quantizer")
+    except FileNotFoundError as e:
+        raise AIMETUnavailableError("qairt_quantizer") from e
+
+    cmd: list[str] = [
+        tool,
+        "--input_dlc", str(intermediate_dlc),
+        "--input_list", list_path,
+        "--output_dlc", str(output_path),
+    ]
+    # Bitwidth + scheme flags — qairt-quantizer accepts:
+    #   --bitwidth 8 / --bitwidth 4
+    #   --weights_bitwidth, --act_bitwidth (separate)
+    #   --use_per_channel_quantization (for symmetric_per_channel)
+    #   --use_per_row_quantization (block-quant for INT4)
+    if config.bitwidth != 8:
+        cmd += ["--bitwidth", str(config.bitwidth)]
+    if config.activation_bitwidth and config.activation_bitwidth != config.bitwidth:
+        cmd += ["--act_bitwidth", str(config.activation_bitwidth)]
+    if "per_channel" in config.scheme:
+        cmd += ["--use_per_channel_quantization"]
+    if config.bitwidth == 4:
+        # INT4 needs block quant
+        cmd += [
+            "--use_per_row_quantization",
+            "--per_row_block_size", str(config.per_channel_block_size),
+        ]
+
+    result = asyncio.run(_run_command(cmd, timeout=600))
+
+    if result.returncode != 0 or not output_path.exists():
+        raise QuantizationError(
+            f"qairt-quantizer failed (rc={result.returncode}): "
+            f"{(result.stderr or '').splitlines()[-1] if result.stderr else 'no stderr'}"
+        )
+
+    # Compression / accuracy estimates
+    src_size = intermediate_dlc.stat().st_size
+    out_size = output_path.stat().st_size
+    compression = src_size / out_size if out_size > 0 else 1.0
+
+    # Heuristic accuracy drop — qairt-quantizer doesn't emit one directly.
+    # These numbers come from public Qualcomm benchmark reports for typical
+    # vision/LLM models; per-model accuracy must be measured separately.
+    accuracy_drop = {4: 1.5, 8: 0.3, 16: 0.05}.get(config.bitwidth, 0.5)
+
+    return QuantizationResult(
+        output_path=output_path.as_posix(),
+        bitwidth=config.bitwidth,
+        scheme=config.scheme,
+        calibration_samples_used=min(config.calibration_samples, 50),
+        accuracy_drop_estimate_pct=accuracy_drop,
+        weight_size_compression=compression,
+        duration_s=_time.perf_counter() - started,
+        backend="qairt_quantizer",
+        notes=[
+            f"Quantized via qairt-quantizer ({tool})",
+            f"Cmd: {' '.join(cmd[:6])}…",
+            "accuracy_drop_estimate_pct is a HEURISTIC — measure on a real eval set "
+            "for production accuracy claims.",
+        ],
+    )
+
+
 # ─── aimet_torch backend ─────────────────────────────────────────────────────
 
 
@@ -446,6 +636,7 @@ class AIMETAdapter:
             "mock": _quantize_mock,
             "aimet_torch": _quantize_aimet_torch,
             "aimet_onnx": _quantize_aimet_onnx,
+            "qairt_quantizer": _quantize_qairt_quantizer,
         }[self._backend]
         return backend_fn(src, out, config, calibration)
 

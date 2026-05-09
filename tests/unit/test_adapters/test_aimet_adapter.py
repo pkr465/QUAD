@@ -69,6 +69,9 @@ class TestBackendDetection:
         import quad.adapters.aimet_adapter as mod
         monkeypatch.setattr(mod, "aimet_torch_available", lambda: False)
         monkeypatch.setattr(mod, "aimet_onnx_available", lambda: False)
+        # Sprint 4 added qairt_quantizer to the auto chain — stub it too
+        # so we exercise the "nothing available" → mock path.
+        monkeypatch.setattr(mod, "qairt_quantizer_available", lambda: False)
         # Clear env var that would force a backend
         monkeypatch.delenv("QUAD_AIMET_BACKEND", raising=False)
         assert select_backend("auto") == "mock"
@@ -128,6 +131,9 @@ class TestAIMETAdapterMock:
         import quad.adapters.aimet_adapter as mod
         monkeypatch.setattr(mod, "aimet_torch_available", lambda: False)
         monkeypatch.setattr(mod, "aimet_onnx_available", lambda: False)
+        # Sprint 4: qairt_quantizer is now in the auto chain — stub for
+        # this "everything missing → mock" assertion.
+        monkeypatch.setattr(mod, "qairt_quantizer_available", lambda: False)
         monkeypatch.delenv("QUAD_AIMET_BACKEND", raising=False)
         a = AIMETAdapter()
         assert a.backend == "mock"
