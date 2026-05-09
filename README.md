@@ -196,9 +196,13 @@ quad mode                                # should now report 'real-mode: READY'
 In **PowerShell** (no bash), use the Python module entry point directly:
 
 ```powershell
-python -m quad.server                    # equivalent to ./launch.sh
-$env:QUAD_ADAPTER_MODE = "real"; python -m quad.server   # real mode
+python -m quad.mcp.server                # equivalent to ./launch.sh
+$env:QUAD_ADAPTER_MODE = "real"; python -m quad.mcp.server   # real mode
 ```
+
+> The legacy module path `python -m quad.server` still works (a backward-compat
+> shim re-exports the FastMCP app) but new code should use `quad.mcp.server` —
+> the `quad.core` / `quad.mcp` / `quad.client` split is the supported layout.
 
 `.claude/settings.json` is generated at install time so Claude Code
 auto-detects the MCP server with all 5 tools pre-approved. Open Claude Code
@@ -248,7 +252,7 @@ Produces a structured report with real measurements. See
 | `quad mode` says `NOT READY` | Run `quad doctor --real-mode` — it tells you exactly what's missing. |
 | `bootstrap.ps1` won't run (execution policy) | Use `bootstrap.bat` instead, or `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1`. |
 | `bash: command not found` on Windows | Run `bootstrap.ps1` first — it installs Git Bash via winget. |
-| `./launch.sh` not found in PowerShell | Use `python -m quad.server` instead, or run launch.sh from Git Bash. |
+| `./launch.sh` not found in PowerShell | Use `python -m quad.mcp.server` instead, or run launch.sh from Git Bash. |
 | 8 tests fail on Windows | Pre-existing path-assertion bugs in modules unrelated to the install. No functional impact. |
 | SDK installed but not detected | `quad sdk discover` shows what was scanned. The SDK directory must contain `bin/<arch>/qairt-converter` (or `snpe-net-run`). |
 | Want CI / unattended install | Set `QAIRT_DOWNLOAD_URL` + `QAIRT_DOWNLOAD_TOKEN` to a pre-authorised mirror; the installer fetches and unpacks automatically. |

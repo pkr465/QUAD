@@ -46,6 +46,20 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+# Re-exposed for tests so callers can verify host detection behaviour
+# without poking at internals.
+__all__ = (
+    "SDKInfo",
+    "InstallResult",
+    "discover_sdks",
+    "resolve_sdk_root",
+    "install_archive",
+    "apply_to_environment",
+    "startup_resolve_and_log",
+    "rank_bin_subdir",
+    "host_arch_label",
+)
+
 logger = logging.getLogger(__name__)
 
 # ── URLs and constants ────────────────────────────────────────────────────────
@@ -83,8 +97,16 @@ DEFAULT_SCAN_PATHS = (
     "/opt/snpe",
 )
 
-# Directory pattern: qairt-2.45.0.260326, snpe-2.45.0, qairt_2.45 etc.
-_SDK_DIR_RE = re.compile(r"^(qairt|snpe)[-_ ]?(\d+\.\d+(?:\.\d+(?:\.\d+)?)?)$", re.I)
+# Directory pattern. Matches:
+#   qairt-2.45.0.260326   (canonical project layout)
+#   snpe-2.45.0           (legacy)
+#   qairt_2.45            (underscore variant)
+#   v2.46.0.260424        (Qualcomm developer-portal naming)
+#   2.46.0.260424         (bare version, e.g. inner dir after archive extract)
+_SDK_DIR_RE = re.compile(
+    r"^(?:(qairt|snpe)[-_ ]?)?v?(\d+\.\d+(?:\.\d+(?:\.\d+)?)?)$",
+    re.I,
+)
 
 
 @dataclass
@@ -106,38 +128,158 @@ class SDKInfo:
 # ── Discovery ────────────────────────────────────────────────────────────────
 
 
+def _has_qairt_converter(sub: Path) -> bool:
+    return (sub / "qairt-converter").exists() or (sub / "qairt-converter.exe").exists()
+
+
+def _has_snpe_net_run(sub: Path) -> bool:
+    return (sub / "snpe-net-run").exists() or (sub / "snpe-net-run.exe").exists()
+
+
+def _has_any_tool(sub: Path) -> bool:
+    return _has_qairt_converter(sub) or _has_snpe_net_run(sub)
+
+
+def host_arch_label() -> str:
+    """Best-effort host arch tag for picking a per-arch SDK bin subdir.
+
+    On Windows ARM64 a Microsoft Store Python is x86_64 (running under
+    Prism), so ``PROCESSOR_ARCHITECTURE`` says AMD64 even though the OS
+    itself is ARM64. ``platform.machine()`` reads the OS-reported arch
+    via the registry and gives the correct answer in that case, so we
+    prefer it.
+    """
+    machine = (platform.machine() or "").upper()
+    if machine in ("ARM64", "AARCH64"):
+        return "arm64"
+    if machine in ("AMD64", "X86_64"):
+        return "x86_64"
+    if machine in ("X86", "I386", "I686"):
+        return "x86"
+    return machine.lower() or "unknown"
+
+
+# Per-host preference: rank a bin subdir from 0 (avoid) to higher (better).
+# Native arch beats emulated arch beats nothing.
+_BIN_RANK_BY_NAME = {
+    "win32": {
+        "arm64": ("aarch64-windows-msvc", "arm64x-windows-msvc", "x86_64-windows-msvc"),
+        "x86_64": ("x86_64-windows-msvc", "arm64x-windows-msvc", "aarch64-windows-msvc"),
+    },
+    "linux": {
+        "arm64": (
+            "aarch64-ubuntu-gcc9.4",
+            "aarch64-oe-linux-gcc11.2",
+            "aarch64-oe-linux-gcc9.3",
+            "aarch64-oe-linux-gcc8.2",
+            "x86_64-linux-clang",
+        ),
+        "x86_64": ("x86_64-linux-clang",),
+    },
+    "darwin": {
+        "arm64": ("aarch64-ubuntu-gcc9.4", "x86_64-linux-clang"),
+        "x86_64": ("x86_64-linux-clang",),
+    },
+}
+
+
+def rank_bin_subdir(name: str, *, host_platform: str | None = None,
+                    host_arch: str | None = None) -> int:
+    """Rank a bin subdir by host preference.
+
+    Higher = better. Returns 0 for unrecognised names.
+    """
+    host_platform = host_platform or sys.platform
+    host_arch = host_arch or host_arch_label()
+    table = _BIN_RANK_BY_NAME.get(host_platform, {}).get(host_arch, ())
+    if name in table:
+        # Prefer earlier entries
+        return len(table) - table.index(name)
+    return 0
+
+
 def _looks_like_sdk_root(path: Path) -> str | None:
-    """Return SDK flavor ('qairt'|'snpe') if ``path`` resembles an SDK root."""
+    """Return SDK flavor ('qairt'|'snpe') if ``path`` resembles an SDK root.
+
+    Searches all bin subdirs before deciding. ``qairt`` wins if either
+    flavor's marker is present, since QAIRT supersedes SNPE and a given
+    install commonly contains both.
+    """
     if not path.is_dir():
         return None
     bin_dir = path / "bin"
     if not bin_dir.is_dir():
         return None
-    # An installed SDK has a per-arch bin subdir
+    saw_snpe = False
     for sub in bin_dir.iterdir():
         if not sub.is_dir():
             continue
-        if (sub / "qairt-converter").exists() or (sub / "qairt-converter.exe").exists():
+        if _has_qairt_converter(sub):
             return "qairt"
-        if (sub / "snpe-net-run").exists() or (sub / "snpe-net-run.exe").exists():
-            return "snpe"
-    return None
+        if _has_snpe_net_run(sub):
+            saw_snpe = True
+    return "snpe" if saw_snpe else None
 
 
-def _version_from_dir_name(name: str) -> tuple[str, str | None]:
-    """Pull (flavor, version) out of a directory name like 'qairt-2.45.0.260326'."""
+def _version_from_dir_name(name: str) -> tuple[str | None, str | None]:
+    """Pull (flavor, version) out of a directory name.
+
+    Recognises ``qairt-2.45.0``, ``snpe-2.45.0``, ``v2.46.0.260424``,
+    and bare ``2.46.0.260424``. Returns ``(None, None)`` if no match;
+    flavor is ``None`` when only a version was extracted (caller decides).
+    """
     m = _SDK_DIR_RE.match(name)
     if not m:
-        return ("qairt", None)
-    return (m.group(1).lower(), m.group(2))
+        return (None, None)
+    flavor_grp = m.group(1)
+    return (flavor_grp.lower() if flavor_grp else None, m.group(2))
+
+
+def _select_bin_dir(bin_root: Path) -> str:
+    """Pick the best per-arch bin subdir for this host.
+
+    Ranking order:
+        1. Has at least one of qairt-converter or snpe-net-run
+        2. Highest host-arch preference (native arch first, emulated next)
+        3. Has qairt-converter (real-mode flagship tool)
+        4. Stable alphabetical fallback for determinism
+
+    Returns "" if no bin subdir contains any recognised tool.
+    """
+    if not bin_root.is_dir():
+        return ""
+    candidates: list[tuple[int, int, int, str, Path]] = []
+    for sub in sorted(bin_root.iterdir()):
+        if not sub.is_dir():
+            continue
+        if not _has_any_tool(sub):
+            continue
+        candidates.append(
+            (
+                rank_bin_subdir(sub.name),
+                int(_has_qairt_converter(sub)),
+                int(_has_snpe_net_run(sub)),
+                sub.name,
+                sub,
+            )
+        )
+    if not candidates:
+        return ""
+    # Sort: rank desc, has_qairt_converter desc, has_snpe_net_run desc, name asc
+    candidates.sort(key=lambda c: (-c[0], -c[1], -c[2], c[3]))
+    return str(candidates[0][4])
 
 
 def _populate_sdkinfo(root: Path, source: str) -> SDKInfo:
     """Build an SDKInfo by inspecting ``root``."""
+    bin_root = root / "bin"
+
+    # Flavor: check the actual install contents, not the dir name guess.
     flavor = _looks_like_sdk_root(root) or "qairt"
-    name_flavor, version = _version_from_dir_name(root.name)
-    if version is None:
-        # Fallback: scan immediate children for a version-shaped name
+
+    # Version: try the root dir name, then immediate children, then "unknown".
+    _, version = _version_from_dir_name(root.name)
+    if version is None and root.is_dir():
         for child in root.iterdir():
             if child.is_dir():
                 _, ver = _version_from_dir_name(child.name)
@@ -147,25 +289,25 @@ def _populate_sdkinfo(root: Path, source: str) -> SDKInfo:
     if version is None:
         version = "unknown"
 
-    bin_root = root / "bin"
-    bin_dir = ""
+    # bin_dir: rank-based selection, native arch wins.
+    bin_dir = _select_bin_dir(bin_root) if bin_root.is_dir() else ""
+
+    # Capability flags: scan ALL bin subdirs, not just the chosen one,
+    # since QAIRT splits converters and runtime tools across arches.
     has_qairt = has_snpe = False
     if bin_root.is_dir():
         for sub in bin_root.iterdir():
             if not sub.is_dir():
                 continue
-            if (sub / "qairt-converter").exists() or (sub / "qairt-converter.exe").exists():
-                bin_dir = str(sub)
+            if _has_qairt_converter(sub):
                 has_qairt = True
-            if (sub / "snpe-net-run").exists() or (sub / "snpe-net-run.exe").exists():
-                if not bin_dir:
-                    bin_dir = str(sub)
+            if _has_snpe_net_run(sub):
                 has_snpe = True
 
     return SDKInfo(
         root=str(root),
         version=version,
-        flavor=flavor if flavor != "qairt" or name_flavor != "snpe" else name_flavor,
+        flavor=flavor,
         source=source,
         bin_dir=bin_dir,
         has_qairt_converter=has_qairt,
@@ -446,21 +588,52 @@ def missing_sdk_message(reason: str = "") -> str:
 # ── Configuration helpers ────────────────────────────────────────────────────
 
 
+def list_all_bin_dirs(root: str | Path) -> list[str]:
+    """Return every per-arch bin subdir of an SDK install, host-arch first.
+
+    QAIRT 2.x splits converters (e.g. `arm64x-windows-msvc/qairt-converter`)
+    and runtime tools (e.g. `aarch64-windows-msvc/qnn-platform-validator`)
+    across separate per-arch subdirs. To find any tool by name we need
+    to look in all of them, ranked by host preference.
+    """
+    root = Path(root)
+    bin_root = root / "bin"
+    if not bin_root.is_dir():
+        return []
+    subs = [s for s in bin_root.iterdir() if s.is_dir() and _has_any_tool(s)]
+    subs.sort(key=lambda s: (-rank_bin_subdir(s.name), s.name))
+    return [str(s) for s in subs]
+
+
 def apply_to_environment(info: SDKInfo) -> None:
     """Set the SDK env vars + PATH so child processes inherit the discovery.
 
     This is what the MCP server startup hook calls after a successful
     discovery so the QAIRTAdapter (and any subprocess it spawns) sees
     the SDK without the user editing their shell init.
+
+    All per-arch bin subdirs of the SDK are prepended to PATH so a tool
+    found only in (say) ``aarch64-windows-msvc`` is reachable even when
+    ``bin_dir`` points at the converter-bearing arch.
     """
     os.environ.setdefault("QAIRT_SDK_ROOT", info.root)
     os.environ.setdefault("QNN_SDK_ROOT", info.root)
     os.environ.setdefault("SNPE_ROOT", info.root)
-    if info.bin_dir:
-        sep = ";" if os.name == "nt" else ":"
-        cur = os.environ.get("PATH", "")
-        if info.bin_dir not in cur.split(sep):
-            os.environ["PATH"] = info.bin_dir + sep + cur
+    sep = ";" if os.name == "nt" else ":"
+    cur_parts = os.environ.get("PATH", "").split(sep)
+    additions: list[str] = []
+    # Primary bin first (so it stays at the front of PATH for users that
+    # rely on a specific arch).
+    if info.bin_dir and info.bin_dir not in cur_parts:
+        additions.append(info.bin_dir)
+    # Then every other live per-arch bin subdir of the install. This is
+    # what lets us find tools that live in a different arch from the
+    # primary (e.g. converters in arm64x, runtime in aarch64).
+    for bd in list_all_bin_dirs(info.root):
+        if bd not in cur_parts and bd not in additions:
+            additions.append(bd)
+    if additions:
+        os.environ["PATH"] = sep.join(additions + cur_parts)
 
 
 def write_state_file(info: SDKInfo | None, project_root: Path | None = None) -> Path:

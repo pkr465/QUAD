@@ -1,12 +1,20 @@
 # QUAD — Pending Tasks
 
-> Last updated: 2026-05-08 | Tests: 2002 passing / 3 skipped / 0 failed | Version: 0.4.0
+> Last updated: 2026-05-08 (Sprint 1) | Tests: ~2068 passing | Version: 0.4.0+sprint1
 >
-> **For the full prioritised gap list, see [`docs/GAP_ANALYSIS.md`](docs/GAP_ANALYSIS.md)** — it's the authoritative reference and includes a tier-by-tier scorecard for every layer of the stack.
+> **Authoritative refs:**
+> - [`docs/PRODUCTION_READINESS_REVIEW_2026-05-08.md`](docs/PRODUCTION_READINESS_REVIEW_2026-05-08.md) — newest review, all current P0/P1/P2 items
+> - [`docs/GAP_ANALYSIS.md`](docs/GAP_ANALYSIS.md) — original 4-tier scorecard
+> - [`docs/IMPLEMENTATION_PROGRESS.md`](docs/IMPLEMENTATION_PROGRESS.md) — what previously landed
 >
-> **Session progress: 11 of 17 Tier-1/Tier-2 gaps fully closed in the
-> overnight gap-closure session.** See [`docs/IMPLEMENTATION_PROGRESS.md`](docs/IMPLEMENTATION_PROGRESS.md) for the
-> per-phase scorecard, what landed, and what's still pending.
+> **Sprint 1 closures (this session):** P0-1 (Windows detect_hardware
+> no longer crashes), P0-2 (arch-aware bin_dir), P0-3 (qairt flavor
+> classification), P0-4 (real qnn-platform-validator parsing), P0-7
+> (PyPI dry-run in CI), P0-8 (QUAD-Client stdio-local Python+import
+> preflight), P0-9 (QUAD-Client SSE handshake validation), P1-1
+> (`_parse_latency` doesn't lie on parse failure), P1-2 (`_SDK_DIR_RE`
+> handles `v2.46.0.260424` and bare versions), P1-5 (README/docs use
+> `quad.mcp.server`).
 >
 > **Quick start for real hardware:**
 >   1. `quad sdk install <path-to-qairt-archive>`  (download from
@@ -23,33 +31,33 @@
 
 ---
 
-## Tier 1 — End-to-end blockers (from 2026-05-07 gap analysis)
+## Tier 1 — End-to-end blockers
 
-These prevent real-mode from working end-to-end on a developer machine
-even after QAIRT is installed. See `docs/GAP_ANALYSIS.md` for full
-detail on each.
+After Sprint 1, the remaining Tier-1 items are all in the Sprint 2-4
+scope below. Closed items are kept here struck-through for history.
 
-- [ ] **Templates not packaged** — `pyproject.toml` doesn't include `templates/**` in package_data; `pip install` from sdist breaks codegen at runtime (T1.7, ~30 min)
-- [ ] **Generated C++ scaffolds are not compilable** — 9 templates with TODO function bodies in QNN init / load / execute / cleanup; validator only checks bracket balance (T1.8, 2-3 days)
-- [ ] **`QAIRTAdapter.execute_inference` ignores input data** — uses `_create_dummy_input_list` regardless of caller; truncates stdout to 500 chars (T1.4, 1 day)
-- [ ] **`_create_dummy_input_list` always returns `np.random.randn(1,3,224,224)`** — wrong for any model with different input shape; breaks quantization calibration (T2.8, 1 day)
-- [ ] **Inference server `start()` has no HTTP binding** — `src/quad/serve/server.py:335` is a no-op; `infer()` returns `np.random` outputs (T1.2, 1-2 weeks)
-- [ ] **Compiler pipeline returns placeholder bytes** — `src/quad/compiler/pipeline.py:71` writes literal `b"QUAD_COMPILED_BINARY"` instead of real binaries (T1.1, 2-3 weeks)
-- [ ] **Runtime is numpy-backed mocks** — `Device`/`Tensor`/`Model`/`PowerMonitor` don't call SDKs (T1.3, 1-2 weeks; entangled with T1.2)
-- [ ] **No AIMET adapter** — quantization claims are hollow; INT4 path absent entirely (T1.5, 2 weeks)
-- [ ] **No AI Hub adapter** — `qai_hub` SDK never imported anywhere in source (T1.6, 2 weeks)
+- [x] ~~Templates not packaged~~ (closed pre-session: hatch `force-include`)
+- [x] ~~`QAIRTAdapter.execute_inference` ignores input data~~ (closed: `qairt_adapter.py:563`, fully marshals input/output via `model_inputs`)
+- [x] ~~`_create_dummy_input_list` always returns `np.random.randn(1,3,224,224)`~~ (closed: real introspection)
+- [x] ~~No AIMET adapter~~ (mock + qairt-quantizer fallback present; real torch/onnx still TODO — see Sprint 4)
+- [x] ~~No AI Hub adapter~~ (closed: `aihub_adapter.py` lazily imports `qai_hub`)
+- [ ] **Generated C++ scaffolds need a CI compile-test** — templates have real SDK API shape; what's missing is a CI step that actually compiles a generated file (T1.8 follow-up, Sprint 2 P0-6)
+- [ ] **Inference server `start()` has no HTTP binding** — Sprint 2 target (T1.2)
+- [ ] **Compiler pipeline returns BackendNotImplementedError** (honest, not a placeholder) — Sprint 3 target (T1.1)
+- [ ] **Runtime is numpy-backed mocks** — Sprint 2-3 partial; full runtime in Sprint 3+ (T1.3)
+- [ ] **AIMET real torch/onnx backends** — Sprint 4 target (T1.5 partial)
 
 ---
 
 ## Tier 2 — Real-mode produces wrong/incomplete output
 
-- [ ] **Latency / per-layer parsers are regex-fragile** — silent fallback to defaults on parse failure (T2.1)
-- [ ] **`detect_hardware` is a hardcoded fallback** — Windows / Android branches not implemented (T2.2)
+- [x] ~~Latency parser silent fallback~~ (Sprint 1 P1-1: returns 0 on no match, callers can detect)
+- [x] ~~`detect_hardware` is hardcoded fallback~~ (Sprint 1 P0-1, P0-4: real validator parsing on all platforms)
+- [x] ~~No CI on Windows~~ (closed pre-session: matrix includes `windows-latest`)
 - [ ] **`orchestrate_workload` output ignored by codegen** — allocation map is dead-end metadata (T2.3)
 - [ ] **`orchestrate_workload` crashes on linting profiles** — empty `report.layers` not handled (T2.4)
 - [ ] **Phase 2/3 platforms have transport but no adapters** — `LinuxPlatform` / `AndroidPlatform` exist but aren't wired into the factory (T2.5)
-- [ ] **No CI on Windows** — 8 path-assertion failures unfixed; matrix is `ubuntu-latest` only (T2.6)
-- [ ] **Package name mismatch** — `quad-agent` in pyproject vs `qualcomm-ai-toolkit` in README install instructions (T2.7)
+- [ ] **Package name mismatch** — `quad-agent` in pyproject vs `qualcomm-ai-toolkit` in README install instructions (T2.7) — Sprint 5 target
 
 ---
 

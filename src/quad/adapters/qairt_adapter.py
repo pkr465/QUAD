@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -41,18 +42,115 @@ def _get_sdk_root() -> Path:
     return Path(root)
 
 
+def _platform_machine_to_arch() -> str:
+    """Return ARM64 / x86_64 / etc. without using ``os.uname`` (Windows-safe)."""
+    import platform as _p
+    m = (_p.machine() or "").upper()
+    if m in ("ARM64", "AARCH64"):
+        return "ARM64"
+    if m in ("AMD64", "X86_64"):
+        return "x86_64"
+    return m or "unknown"
+
+
+# Regexes for qnn-platform-validator stdout. The QAIRT 2.45+ output
+# looks roughly like:
+#   Backend: cpu        is supported
+#   Backend: gpu        is supported
+#   Backend: dsp        is supported (skel: v75)
+#   Chipset: SM8750
+# We accept variations across versions (case, punctuation).
+_RX_BACKEND = re.compile(
+    r"^\s*Backend\s*:\s*(?P<be>cpu|gpu|dsp|htp|saver)\b.*?\bsupport(ed)?",
+    re.I | re.M,
+)
+_RX_CHIPSET = re.compile(r"\bChipset\s*[:=]\s*(?P<v>[\w\-\. ]+)", re.I)
+_RX_SOC = re.compile(r"\bSoC\s*[:=]\s*(?P<v>[\w\-\. ]+)", re.I)
+_RX_NPU_HEXAGON = re.compile(r"\b(Hexagon\s+(?:NPU|HTP|DSP)[\w\.\- ]*)", re.I)
+_RX_GPU_ADRENO = re.compile(r"\b(Adreno[\w\.\- ]*)", re.I)
+
+
+def _parse_platform_validator(output: str) -> dict[str, Any]:
+    """Parse qnn-platform-validator stdout into a small dict.
+
+    Returns keys ``runtimes`` (list[str]), ``chipset``, ``npu``, ``gpu``.
+    Always returns the dict — missing keys map to None or [].
+    """
+    runtimes: list[str] = []
+    for m in _RX_BACKEND.finditer(output):
+        be = m.group("be").lower()
+        # dsp/htp both mean NPU in QUAD's runtime vocabulary
+        rt = "npu" if be in ("dsp", "htp") else be
+        if rt not in runtimes:
+            runtimes.append(rt)
+
+    chipset = None
+    for rx in (_RX_CHIPSET, _RX_SOC):
+        m = rx.search(output)
+        if m:
+            chipset = m.group("v").strip().rstrip(",.;")
+            break
+
+    npu = None
+    m = _RX_NPU_HEXAGON.search(output)
+    if m:
+        npu = m.group(1).strip()
+
+    gpu = None
+    m = _RX_GPU_ADRENO.search(output)
+    if m:
+        gpu = m.group(1).strip()
+
+    return {"runtimes": runtimes, "chipset": chipset, "npu": npu, "gpu": gpu}
+
+
 def _find_tool(name: str) -> str:
-    """Find a QAIRT tool binary."""
-    # Check PATH first
+    """Find a QAIRT tool binary across all per-arch bin subdirs.
+
+    Resolution order:
+        1. Plain ``shutil.which`` (PATH)
+        2. ``shutil.which`` with ``.exe`` appended on Windows
+        3. Every per-arch bin subdir of the SDK, host-arch first
+
+    QAIRT 2.x splits converters (only in arm64x/x86_64) from runtime
+    tools (in every arch) so we can't assume a single bin dir holds
+    every tool.
+    """
+    # 1) PATH
     tool = shutil.which(name)
     if tool:
         return tool
-    # Check SDK bin directory
-    sdk_root = _get_sdk_root()
-    tool_path = sdk_root / "bin" / "x86_64-linux-clang" / name
-    if tool_path.exists():
-        return str(tool_path)
-    raise FileNotFoundError(f"Tool '{name}' not found. Ensure QAIRT SDK is in PATH.")
+    # 2) PATH with .exe on Windows (callers sometimes pass the bare name)
+    if os.name == "nt" and not name.endswith(".exe"):
+        tool = shutil.which(name + ".exe")
+        if tool:
+            return tool
+
+    # 3) Walk every per-arch bin subdir of the resolved SDK.
+    from quad.sdk_manager import list_all_bin_dirs
+
+    try:
+        sdk_root = _get_sdk_root()
+    except EnvironmentError:
+        raise FileNotFoundError(
+            f"Tool '{name}' not found and no SDK is configured. "
+            "Set QAIRT_SDK_ROOT or run `quad sdk install <archive>`."
+        )
+
+    candidate_names = (name,)
+    if os.name == "nt" and not name.endswith(".exe"):
+        candidate_names = (name + ".exe", name)
+
+    for bin_dir in list_all_bin_dirs(sdk_root):
+        for cn in candidate_names:
+            p = Path(bin_dir) / cn
+            if p.exists():
+                return str(p)
+
+    raise FileNotFoundError(
+        f"Tool '{name}' not found in PATH or under {sdk_root}/bin/. "
+        "Verify the SDK install is complete (run `quad sdk status`)."
+    )
 
 
 async def _run_command(cmd: list[str], timeout: float = 300.0) -> subprocess.CompletedProcess:
@@ -96,36 +194,99 @@ class QAIRTAdapter(SDKAdapter):
             self._sdk_root = _get_sdk_root()
 
     async def detect_hardware(self, platform: str) -> DeviceProfile:
-        """Detect hardware via SDK platform validator."""
-        # On-device: use snpe-platform-validator or read /proc/cpuinfo
-        # On host: return host capabilities
+        """Detect hardware via SDK platform validator with real parsing.
+
+        Tries the SDK's ``qnn-platform-validator`` first (the source of
+        truth for which backends/runtimes are usable on this host), then
+        falls back to ``quad.runtime.host_probe`` for CPU/GPU/RAM and a
+        per-platform default for the chipset string. The fallback
+        intentionally avoids ``os.uname`` so it works on Windows.
+        """
+        from quad.runtime.host_probe import probe_host
+
+        validator_runtimes: list[str] = []
+        validator_chipset: str | None = None
+        validator_npu: str | None = None
+        validator_gpu: str | None = None
         try:
             tool = _find_tool("qnn-platform-validator")
-            result = await _run_command([tool, "--help"], timeout=10)
-            # Parse platform validator output for device info
-        except (FileNotFoundError, TimeoutError):
+            # `--coreVersion --backend all` prints per-backend availability
+            # in QAIRT 2.45+; if --backend isn't supported we degrade to
+            # `--help`, which always returns 0 and tells us the tool runs.
+            for args in (
+                [tool, "--coreVersion", "--backend", "all"],
+                [tool, "--libVersion", "--backend", "all"],
+                [tool, "--help"],
+            ):
+                try:
+                    result = await _run_command(args, timeout=10)
+                except TimeoutError:
+                    continue
+                if result.returncode == 0:
+                    parsed = _parse_platform_validator(result.stdout + result.stderr)
+                    validator_runtimes = parsed.get("runtimes", []) or validator_runtimes
+                    validator_chipset = parsed.get("chipset") or validator_chipset
+                    validator_npu = parsed.get("npu") or validator_npu
+                    validator_gpu = parsed.get("gpu") or validator_gpu
+                    if validator_runtimes:
+                        break
+        except (FileNotFoundError, OSError):
+            # Validator not present — degrade gracefully
             pass
 
-        # Fallback: return profile based on platform
-        profiles = {
-            "linux": DeviceProfile(
-                chipset="Qualcomm SoC (detected via QAIRT)",
-                platform="linux",
-                cpu_cores=os.cpu_count() or 4,
-                cpu_arch="ARM64" if os.uname().machine == "aarch64" else "x86_64",
-                cpu_freq_ghz=2.0,
-                gpu_model="Adreno",
-                gpu_tflops=0.0,
-                npu_model="Hexagon DSP",
-                npu_tops=0.0,
-                ram_gb=os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024**3)
-                if hasattr(os, "sysconf") else 8.0,
-                sdk_path=str(self._sdk_root),
-                sdk_version=self._sdk_root.name,
-                available_runtimes=["cpu", "gpu", "npu"],
+        # Fall back to live host probe for CPU / GPU / RAM (cross-platform).
+        try:
+            host = probe_host()
+            cpu_cores = host.cpu_cores or os.cpu_count() or 4
+            cpu_arch = host.cpu_arch or host.os_arch or _platform_machine_to_arch()
+            cpu_freq = (host.cpu_max_mhz / 1000.0) if host.cpu_max_mhz else 0.0
+            ram_gb = host.ram_gb or 0.0
+            host_chipset = host.cpu_name or None
+            host_gpu = host.gpu_name or None
+            host_npu = host.npu_name or None
+        except Exception:
+            cpu_cores = os.cpu_count() or 4
+            cpu_arch = _platform_machine_to_arch()
+            cpu_freq = 0.0
+            ram_gb = 0.0
+            host_chipset = None
+            host_gpu = None
+            host_npu = None
+
+        defaults = {
+            "windows": dict(
+                chipset_default="Snapdragon X (Compute, Windows)",
+                gpu_default="Adreno",
+                npu_default="Hexagon NPU",
+            ),
+            "linux": dict(
+                chipset_default="Qualcomm SoC (Linux)",
+                gpu_default="Adreno",
+                npu_default="Hexagon DSP",
+            ),
+            "android": dict(
+                chipset_default="Snapdragon (Android)",
+                gpu_default="Adreno",
+                npu_default="Hexagon NPU",
             ),
         }
-        return profiles.get(platform, profiles["linux"])
+        d = defaults.get(platform, defaults["linux"])
+
+        return DeviceProfile(
+            chipset=validator_chipset or host_chipset or d["chipset_default"],
+            platform=platform,
+            cpu_cores=cpu_cores,
+            cpu_arch=cpu_arch,
+            cpu_freq_ghz=cpu_freq,
+            gpu_model=validator_gpu or host_gpu or d["gpu_default"],
+            gpu_tflops=0.0,
+            npu_model=validator_npu or host_npu or d["npu_default"],
+            npu_tops=0.0,
+            ram_gb=ram_gb,
+            sdk_path=str(self._sdk_root),
+            sdk_version=self._sdk_root.name,
+            available_runtimes=validator_runtimes or ["cpu"],
+        )
 
     async def convert_model(self, request: ConversionRequest) -> ConversionResult:
         """Convert model using qairt-converter + optional qairt-quantizer."""
@@ -359,6 +520,20 @@ class QAIRTAdapter(SDKAdapter):
         device = await self.detect_hardware(request.platform)
         runtime_used = request.runtime if request.runtime != "auto" else "npu"
 
+        notes: dict[str, str] = {}
+        notes["latency"] = (
+            "measured:snpe-net-run" if latency_ms > 0
+            else "not_measured:parser_no_match"
+        )
+        notes["layers"] = "measured:snpe-net-run" if layers else "not_measured"
+        # power: snpe-net-run does not report power. QPM3 / Snapdragon
+        # Profiler integration is the future home for this; today we
+        # explicitly say it wasn't measured rather than emit a fictional
+        # 2000 mW constant.
+        notes["power"] = "not_measured:requires_qpm3_or_profiler"
+        notes["memory"] = "not_measured:requires_per_proc_rss_capture"
+        notes["utilization"] = "not_measured:requires_profiler_capture"
+
         return ProfilingReport(
             latency=LatencyStats(
                 mean_ms=latency_ms,
@@ -369,15 +544,16 @@ class QAIRTAdapter(SDKAdapter):
                 max_ms=latency_ms * 1.8,
             ),
             throughput_fps=round(1000.0 / latency_ms, 1) if latency_ms > 0 else 0,
-            power_mw=2000.0,
-            memory_peak_mb=50.0,
-            memory_avg_mb=40.0,
-            utilization={"cpu": 10.0, "gpu": 5.0, "npu": 85.0},
+            power_mw=0.0,
+            memory_peak_mb=0.0,
+            memory_avg_mb=0.0,
+            utilization={},
             layers=layers,
             device=device,
             runtime_used=runtime_used,
             duration_s=float(request.duration_s),
             profiling_level=level.value,
+            measurement_notes=notes,
         )
 
     async def _profile_linting(self, request: ProfileRequest) -> ProfilingReport:
@@ -435,6 +611,14 @@ class QAIRTAdapter(SDKAdapter):
         device = await self.detect_hardware(request.platform)
         latency_ms = self._parse_latency(result.stdout)
 
+        notes = {
+            "latency": "measured:snpe-net-run" if latency_ms > 0 else "not_measured",
+            "linting_cycles": "measured:snpe-net-run --profiling_level linting",
+            "power": "not_measured:requires_qpm3_or_profiler",
+            "memory": "not_measured:requires_per_proc_rss_capture",
+            "utilization": "not_measured:requires_profiler_capture",
+        }
+
         return ProfilingReport(
             latency=LatencyStats(
                 mean_ms=latency_ms,
@@ -445,10 +629,10 @@ class QAIRTAdapter(SDKAdapter):
                 max_ms=latency_ms * 1.8,
             ),
             throughput_fps=round(1000.0 / latency_ms, 1) if latency_ms > 0 else 0,
-            power_mw=2000.0,
-            memory_peak_mb=50.0,
-            memory_avg_mb=40.0,
-            utilization={"cpu": 5.0, "gpu": 0.0, "npu": 95.0},
+            power_mw=0.0,
+            memory_peak_mb=0.0,
+            memory_avg_mb=0.0,
+            utilization={},
             layers=[],  # Linting doesn't report ms-based layer times
             device=device,
             runtime_used="npu",
@@ -458,6 +642,7 @@ class QAIRTAdapter(SDKAdapter):
             linting_total_cycles=linting_profile.total_cycles,
             linting_bottleneck_count=len(linting_profile.all_bottleneck_ops),
             linting_optimization_hints=hints[:5],
+            measurement_notes=notes,
         )
 
     async def _profile_qhas(self, request: ProfileRequest) -> ProfilingReport:
@@ -742,20 +927,27 @@ class QAIRTAdapter(SDKAdapter):
         return list_path
 
     def _parse_latency(self, stdout: str) -> float:
-        """Parse latency from snpe-net-run output."""
-        # snpe-net-run typically outputs timing like:
-        # "Total Inference Time: X.XX ms"
-        import re
+        """Parse latency from snpe-net-run output.
+
+        Returns 0.0 (a sentinel meaning "unknown") rather than a fictional
+        default if no pattern matches. Callers must check ``> 0`` before
+        deriving throughput etc. The previous 5.0 ms fallback silently
+        masked parser breakage.
+        """
         patterns = [
             r"Total Inference Time:\s*([\d.]+)\s*ms",
-            r"Average inference time:\s*([\d.]+)",
-            r"time.*?(\d+\.?\d*)\s*ms",
+            r"Average inference time:\s*([\d.]+)\s*ms?",
+            r"\bAverage\s+Total\s+Inference\s+Time\s*:\s*([\d.]+)",
+            r"\binference time\s*[:=]\s*([\d.]+)\s*ms",
         ]
         for pattern in patterns:
             match = re.search(pattern, stdout, re.IGNORECASE)
             if match:
-                return float(match.group(1))
-        return 5.0  # Default estimate if parsing fails
+                try:
+                    return float(match.group(1))
+                except ValueError:
+                    continue
+        return 0.0
 
     def _parse_layers(self, stdout: str) -> list[LayerProfile]:
         """Parse per-layer profiling from snpe-net-run output."""

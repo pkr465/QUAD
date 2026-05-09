@@ -102,3 +102,8 @@ class ProfilingReport(BaseModel):
     # QHAS-specific fields (populated when profiling_level == "qhas")
     qhas_chrometrace_path: Optional[str] = None
     qhas_htp_json_path: Optional[str] = None
+
+    # Provenance for each metric — "measured" / "estimated" / "not_measured".
+    # Real adapters use this to flag which numbers came from a parser vs a
+    # cross-tool default. Mock adapters can leave it empty.
+    measurement_notes: dict[str, str] = Field(default_factory=dict)
