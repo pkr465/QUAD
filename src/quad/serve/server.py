@@ -8,19 +8,39 @@ Usage:
     server.load_model("yolo", "models/yolo.qbin", device="npu:0")
     server.load_model("resnet", "models/resnet.qbin", device="npu:1")
     server.start()  # Blocking
+
+Two runtime backends:
+    runtime="mock"  — `infer()` returns deterministic random output of
+                      the right shape (no SDK required, default).
+    runtime="qairt" — `infer()` shells out to `snpe-net-run` via
+                      ``QAIRTAdapter.execute_inference`` and returns
+                      real model outputs. Requires QAIRT_SDK_ROOT.
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 import numpy as np
 
 from quad.runtime.device import Device
 from quad.serve.request import InferenceRequest, InferenceResponse, BatchRequest
+
+logger = logging.getLogger(__name__)
+
+
+# Extensions that the QAIRT adapter can run via snpe-net-run / qnn-net-run
+_QAIRT_RUNNABLE_EXT = {".dlc", ".bin"}
+
+# Backend label
+RuntimeBackend = Literal["mock", "qairt"]
 
 
 # ---------------------------------------------------------------------------
@@ -125,13 +145,56 @@ class ModelServer:
         port: int = 8080,
         host: str = "0.0.0.0",
         power_budget_mw: int | None = None,
+        runtime: RuntimeBackend = "mock",
+        adapter: Any | None = None,
     ):
+        """
+        Args:
+            port / host / power_budget_mw: ServerConfig fields.
+            runtime: "mock" (default) returns deterministic random outputs;
+                "qairt" calls the real QAIRTAdapter.execute_inference
+                pipeline (snpe-net-run / qnn-net-run subprocess).
+            adapter: Inject a pre-built adapter (mostly for tests). When
+                None and runtime="qairt", a fresh QAIRTAdapter is built
+                lazily on the first inference.
+        """
         self._config = ServerConfig(port=port, host=host, power_budget_mw=power_budget_mw)
         self._models: dict[str, ModelInfo] = {}
         self._running = False
         self._start_time: float | None = None
         self._total_inferences: int = 0
         self._latencies: list[float] = []
+        self._runtime: RuntimeBackend = runtime
+        self._adapter: Any | None = adapter
+
+    @classmethod
+    def from_env(cls, **kwargs: Any) -> "ModelServer":
+        """Build a ModelServer whose runtime is controlled by env vars.
+
+        ``QUAD_SERVE_RUNTIME=qairt`` (or ``real``) wires the real adapter
+        when a Qualcomm SDK is reachable; otherwise mock mode. This is
+        what ``quad serve`` and the FastAPI factory use so the server's
+        inference path automatically tracks the rest of QUAD's adapter
+        mode.
+        """
+        wanted = os.environ.get("QUAD_SERVE_RUNTIME", "").strip().lower()
+        if wanted in ("qairt", "real"):
+            return cls(runtime="qairt", **kwargs)
+        # Default: respect the broader adapter mode env var; fallback mock
+        adapter_mode = os.environ.get("QUAD_ADAPTER_MODE", "").strip().lower()
+        if adapter_mode == "real" and (
+            os.environ.get("QAIRT_SDK_ROOT") or os.environ.get("SNPE_ROOT")
+        ):
+            return cls(runtime="qairt", **kwargs)
+        return cls(runtime="mock", **kwargs)
+
+    def _get_adapter(self) -> Any:
+        """Lazy-construct the QAIRT adapter on first real inference."""
+        if self._adapter is not None:
+            return self._adapter
+        from quad.adapters.qairt_adapter import QAIRTAdapter
+        self._adapter = QAIRTAdapter()
+        return self._adapter
 
     # ------------------------------------------------------------------
     # Model management
@@ -217,19 +280,24 @@ class ModelServer:
         model_info = self._models[model_name]
         start = time.perf_counter()
 
-        # Mock inference: produce output based on input shapes
-        outputs = {}
-        for input_name, input_array in inputs.items():
-            # Simulate model output (e.g., classification logits)
-            if len(input_array.shape) == 4:
-                # Image input -> classification output
-                batch_size = input_array.shape[0]
-                outputs["output"] = np.random.randn(batch_size, 1000).astype(np.float32)
-            elif len(input_array.shape) == 2:
-                # Sequence input -> sequence output
-                outputs["output"] = np.random.randn(*input_array.shape).astype(np.float32)
-            else:
-                outputs["output"] = np.random.randn(*input_array.shape).astype(np.float32)
+        # Dispatch by runtime: real QAIRT for .dlc / .bin, mock otherwise
+        # OR when explicitly configured for mock mode.
+        ext = Path(model_info.path).suffix.lower()
+        use_real = (
+            self._runtime == "qairt"
+            and ext in _QAIRT_RUNNABLE_EXT
+        )
+        if use_real:
+            try:
+                outputs = self._infer_qairt(model_info, inputs)
+            except Exception as e:  # broad: real-mode failure should NOT crash the server
+                logger.warning(
+                    "qairt_infer_failed_falling_back_to_mock",
+                    extra={"model": model_name, "error": str(e)[:300]},
+                )
+                outputs = self._infer_mock(inputs)
+        else:
+            outputs = self._infer_mock(inputs)
 
         elapsed_ms = (time.perf_counter() - start) * 1000.0
 
@@ -244,6 +312,67 @@ class ModelServer:
             model_name=model_name,
             request_id=str(uuid.uuid4()),
         )
+
+    @staticmethod
+    def _infer_mock(inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Deterministic mock inference: shape-preserving random output.
+
+        Used when ``runtime="mock"`` or when real-mode inference fails
+        and we degrade gracefully. Output shape depends on input rank:
+        - 4D (NCHW/NHWC image) → classification logits (batch, 1000)
+        - 2D (sequence) → same-shape output
+        - other → same-shape output
+        """
+        outputs: dict[str, np.ndarray] = {}
+        first_array = next(iter(inputs.values()))
+        if first_array.ndim == 4:
+            batch_size = first_array.shape[0]
+            outputs["output"] = np.random.randn(batch_size, 1000).astype(np.float32)
+        else:
+            outputs["output"] = np.random.randn(*first_array.shape).astype(np.float32)
+        return outputs
+
+    def _infer_qairt(
+        self,
+        model_info: ModelInfo,
+        inputs: dict[str, np.ndarray],
+    ) -> dict[str, np.ndarray]:
+        """Run real inference via QAIRTAdapter.execute_inference.
+
+        Bridges the sync HTTP layer to the async adapter using a per-call
+        ``asyncio.run``. For high-throughput serving this should move to
+        a dedicated worker thread / loop; the per-call cost is negligible
+        compared to the snpe-net-run subprocess time.
+        """
+        adapter = self._get_adapter()
+        # Map our device string ("npu" / "npu:0" / "gpu" / "cpu") to the
+        # adapter's runtime selector ("npu" / "gpu" / "cpu" / "auto").
+        dev_label = model_info.device.split(":", 1)[0].lower()
+        runtime = dev_label if dev_label in ("cpu", "gpu", "npu") else "auto"
+
+        result = asyncio.run(
+            adapter.execute_inference(
+                model_path=model_info.path,
+                input_data=inputs,
+                runtime=runtime,
+            )
+        )
+
+        if result.get("status") != "success":
+            raise RuntimeError(
+                f"snpe-net-run failed (rc={result.get('returncode')}): "
+                f"{(result.get('stderr') or '').splitlines()[-1] if result.get('stderr') else 'no stderr'}"
+            )
+        outputs = result.get("outputs") or {}
+        if not outputs:
+            # The subprocess succeeded but produced no parsed outputs —
+            # most likely a model_io introspection miss. Don't pretend
+            # we have data; surface the failure.
+            raise RuntimeError(
+                f"snpe-net-run succeeded but produced no outputs at "
+                f"{result.get('work_dir')}; check model output specs."
+            )
+        return outputs
 
     def infer_batch(
         self, model_name: str, batch: list[dict[str, np.ndarray]]

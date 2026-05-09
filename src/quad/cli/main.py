@@ -229,9 +229,12 @@ def serve(
         raise typer.Exit(code=1)
 
     typer.echo(f"Loading {model_path} as model '{name}' on {device}…")
-    server = ModelServer(host=host, port=port)
+    server = ModelServer.from_env(host=host, port=port)
     server.start()
     server.load_model(name, model_path, device=device)
+    typer.echo(f"Runtime: {server._runtime} "
+               + ("(real inference via QAIRT)" if server._runtime == "qairt"
+                  else "(mock — set QUAD_SERVE_RUNTIME=qairt for real inference)"))
 
     typer.echo(f"Serving on http://{host}:{port}")
     typer.echo("Endpoints:")

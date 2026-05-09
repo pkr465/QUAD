@@ -92,6 +92,7 @@ class HealthResponse(BaseModel):
     status: str
     models_loaded: int
     uptime_s: float
+    runtime: str = "mock"
 
 
 class MetricsResponse(BaseModel):
@@ -136,7 +137,10 @@ def build_app(server: ModelServer | None = None) -> "_FastAPI":
             "(or pip install -e .[real])"
         ) from e
 
-    state = server if server is not None else ModelServer()
+    # When the caller didn't pre-build a server, use the env-aware
+    # factory so QUAD_SERVE_RUNTIME=qairt (or QUAD_ADAPTER_MODE=real with
+    # a reachable SDK) automatically wires real inference.
+    state = server if server is not None else ModelServer.from_env()
     if not state.is_running:
         state.start()
 
@@ -153,6 +157,7 @@ def build_app(server: ModelServer | None = None) -> "_FastAPI":
             status=h.status,
             models_loaded=h.models_loaded,
             uptime_s=h.uptime_s,
+            runtime=getattr(state, "_runtime", "mock"),
         )
 
     @app.get("/metrics", response_model=MetricsResponse)
