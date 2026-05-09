@@ -174,34 +174,99 @@ def benchmark(
 @app.command()
 def compile(
     model_path: str = typer.Argument(..., help="Path to model file (.onnx, .pt)"),
-    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output path"),
-    device: str = typer.Option("auto", help="Target device"),
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output .qbin path"),
+    targets: str = typer.Option(
+        "all",
+        help="Comma-separated target list (e.g. 'qnpu_v3,qdsp_v66') or 'all'",
+    ),
+    portable: bool = typer.Option(
+        False, "--portable", help="IR-only build; JIT each target at load time"
+    ),
+    quantization: str = typer.Option(
+        "fp32", help="Quantization scheme: fp32 | int8 | int4"
+    ),
+    backend: str = typer.Option(
+        "auto", help="Backend: auto (default) | qairt | stub"
+    ),
+    coverage_only: bool = typer.Option(
+        False, "--coverage-only", help="IR + per-target op-coverage report only"
+    ),
 ) -> None:
     """Compile a model to QUAD binary format."""
     from quad.compiler.pipeline import compile_model
 
-    qbin = compile_model(model_path=model_path, output_path=output, targets=[device])
+    target_list: list[str] | str
+    if targets == "all":
+        target_list = "all"
+    else:
+        target_list = [t.strip() for t in targets.split(",") if t.strip()]
+
+    qbin = compile_model(
+        model_path=model_path,
+        output_path=output,
+        targets=target_list,  # type: ignore[arg-type]
+        portable=portable,
+        backend=backend,  # type: ignore[arg-type]
+        quantization=quantization,  # type: ignore[arg-type]
+        coverage_only=coverage_only,
+    )
     typer.echo(f"Compiled: {qbin.path}")
 
 
 @app.command()
 def optimize(
     model_path: str = typer.Argument(..., help="Path to model or .qbin"),
-    level: int = typer.Option(2, help="Optimization level (0-3)"),
+    target: str = typer.Option("qnpu_v3", help="Target capability (e.g. qnpu_v3)"),
+    quantization: str = typer.Option("int8", help="Quantization: fp32 | int8 | int4 | none"),
+    power_budget_mw: float | None = typer.Option(
+        None, "--power-budget", help="Power budget in milliwatts"
+    ),
 ) -> None:
-    """Optimize a compiled model."""
-    typer.echo(f"Optimizing {model_path} at level {level}...")
-    typer.echo("Optimization complete.")
+    """Run the graph-optimization pipeline on a model."""
+    from quad.optimizer import optimize_model
+
+    result = optimize_model(
+        model_path=model_path,
+        target=target,
+        quantization=quantization,
+        power_budget_mw=power_budget_mw,
+    )
+    typer.echo(
+        f"Nodes: {result.original_nodes} -> {result.optimized_nodes} "
+        f"({len(result.passes_applied)} passes)"
+    )
+    typer.echo(f"Estimated speedup:        {result.estimated_speedup:.2f}x")
+    typer.echo(f"Estimated power savings:  {result.estimated_power_reduction_pct:.0f}%")
+    typer.echo(f"Quantization applied:     {result.quantization_applied}")
+    typer.echo(f"Passes:                   {', '.join(result.passes_applied)}")
 
 
 @app.command()
 def profile(
-    model_path: str = typer.Argument(..., help="Path to compiled .qbin"),
-    device: str = typer.Option("auto", help="Target device"),
+    model_path: str = typer.Argument(..., help="Path to compiled model (.qbin / .dlc / .onnx)"),
+    level: str = typer.Option("kernel", help="Profile depth: system | kernel | deep"),
+    device: str = typer.Option("npu", help="Target device: npu | gpu | cpu"),
 ) -> None:
-    """Profile a compiled model workload."""
-    typer.echo(f"Profiling {model_path} on {device}...")
-    typer.echo("Profile complete.")
+    """Profile a model — system / kernel / deep (power + memory)."""
+    from quad.profiler import profile_model
+
+    summary = profile_model(model_path=model_path, level=level, device=device)  # type: ignore[arg-type]
+    typer.echo(
+        f"Profile depth: {level}  device: {device}  "
+        f"duration: {summary.profile_duration_ms} ms"
+    )
+    if summary.kernel_report is not None:
+        top = (
+            summary.kernel_report.top_kernels(5)
+            if hasattr(summary.kernel_report, "top_kernels")
+            else []
+        )
+        if top:
+            typer.echo("Top kernels:")
+            for k in top:
+                typer.echo(f"  {k.name}: {k.latency_us}us ({k.bottleneck})")
+    if level == "deep" and summary.power_trace is not None:
+        typer.echo(f"Average power: {summary.power_trace.avg_power_mw:.0f} mW")
 
 
 @app.command()
@@ -545,6 +610,15 @@ def sdk_install(
 
 def main() -> None:
     """Entry point for the quad CLI."""
+    # On Windows the default console code page is cp1252; the help text
+    # and output use em-dashes and other non-ASCII glyphs. Reconfigure
+    # stdio to UTF-8 with 'replace' so we degrade to '?' on legacy
+    # terminals instead of crashing.
+    import contextlib
+    import sys
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, OSError):
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
     app()
 
 

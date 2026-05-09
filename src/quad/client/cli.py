@@ -288,6 +288,14 @@ def connect_test(
 
 def cli() -> None:
     """Entry point for the ``quad-client`` script."""
+    # On Windows the default console code page is cp1252, which can't encode
+    # the ✓/✗/→ glyphs the probe renderer emits. Reconfigure to UTF-8 with
+    # 'replace' so we degrade to '?' on legacy terminals instead of crashing
+    # the whole command after the probe has already succeeded.
+    import contextlib
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, OSError):
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
     app()
 
 

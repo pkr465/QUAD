@@ -159,7 +159,7 @@ is already present. `bootstrap.bat` is a cmd.exe shim that prefers `pwsh.exe`
 ```bash
 quad mode                   # → adapter mode + real-mode readiness
 quad sdk status             # → which SDK was discovered, where, version
-quad doctor                 # → 14 environment checks
+quad doctor                 # → 16 environment checks
 quad doctor --real-mode     # → strict pre-flight; exits non-zero on any SDK issue
 ```
 

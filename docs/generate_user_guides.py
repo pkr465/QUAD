@@ -145,7 +145,7 @@ def title_page(doc: Document, title: str, subtitle: str, audience: str) -> None:
 
     p4 = doc.add_paragraph()
     p4.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r4 = p4.add_run("Generated 2026-05-08  •  QUAD v0.4.0+sprints")
+    r4 = p4.add_run("QUAD v0.4.0")
     r4.font.size = Pt(10)
     r4.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
     doc.add_page_break()
@@ -313,7 +313,8 @@ source ./activate.sh && quad mode    # → 'real-mode: READY'
 .\\bootstrap.ps1 -MockOnly  # Windows PowerShell
 """)
     p(doc, "Use this on CI runners and on developer laptops that don't need to "
-           "talk to real hardware. All 2073 unit tests pass in this configuration.")
+           "talk to real hardware. The full test suite passes in this configuration "
+           "— run `pytest -q` after install for the live count.")
 
     h2(doc, "4.4  CI / unattended install")
     p(doc, "Set QAIRT_DOWNLOAD_URL and QAIRT_DOWNLOAD_TOKEN to a pre-authorised "
@@ -710,7 +711,7 @@ quad sdk install ~/Downloads/v2.47.0.260524.zip
     code(doc, """
 git pull origin main
 ./install.sh        # idempotent — re-runs only what changed
-pytest -q           # 2073 should pass; same 26 pre-existing failures
+pytest -q           # full suite — flag any new regressions
 """)
     h2(doc, "16.3  Clearing the compile cache")
     code(doc, """

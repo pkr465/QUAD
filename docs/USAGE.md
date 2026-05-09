@@ -10,10 +10,14 @@ This guide covers the full QUAD platform — from installation to production inf
 ## Quick Start (3 commands)
 
 ```bash
-./install.sh          # Install + verify (375 tests)
+./install.sh          # Install + verify (runs the full test suite)
 ./launch.sh           # Start MCP server (mock mode)
 quad quickstart       # Interactive zero-to-inference wizard
 ```
+
+> The three CLI entry points after install: `quad` (the developer toolchain),
+> `quad-server` (long-running MCP server), `quad-client` (lightweight Claude
+> Code provisioner — see [`docs/CLIENT_INSTALL.md`](CLIENT_INSTALL.md)).
 
 ---
 
@@ -38,7 +42,7 @@ git clone git@github.qualcomm.com:pavanr/QUAD.git && cd QUAD
 3. Installs `quad-agent` package + dev dependencies
 4. Copies `configs/quad.toml.example` → `quad.toml`
 5. Verifies `.claude/settings.json` for MCP auto-detection
-6. Runs full test suite (375 tests)
+6. Runs the full test suite
 
 ### Manual Install
 
@@ -60,12 +64,16 @@ QUAD includes `.claude/settings.json` **committed to the repository**. Claude Co
   "mcpServers": {
     "quad": {
       "command": "python",
-      "args": ["-m", "quad.server.main"],
+      "args": ["-m", "quad.mcp.server"],
       "env": {"QUAD_ADAPTER_MODE": "mock"}
     }
   }
 }
 ```
+
+> `quad.mcp.server` is the canonical module path. `quad.server.main` works
+> too — `quad.server` is a thin backward-compat shim that re-exports the
+> FastMCP app.
 
 **No manual configuration needed.** Just run `./launch.sh` and use Claude Code normally.
 
@@ -301,29 +309,42 @@ models = registry.search("classification")
 ```bash
 # Getting started
 quad quickstart              # Interactive wizard: detect → compile → profile → generate
-quad doctor                  # Check environment (7 diagnostics)
+quad doctor                  # Run 16 environment diagnostics
+quad doctor --real-mode      # Strict pre-flight (exits non-zero on any SDK issue)
 quad version                 # Show QUAD version
+
+# SDK management
+quad sdk status              # Show the active SDK + version + bin dir
+quad sdk discover            # Scan all standard locations
+quad sdk install <archive>   # Unpack a downloaded SDK archive into ./sdks/
+quad mode                    # Show adapter mode + real-mode readiness
+quad mode --set real         # Print 'export QUAD_ADAPTER_MODE=real' for shell-eval
 
 # Compilation
 quad compile model.onnx --output model.qbin --targets all
-quad compile model.onnx --portable  # IR only (JIT at load)
+quad compile model.onnx --targets qnpu_v3,qdsp_v66
+quad compile model.onnx --portable                  # IR only (JIT at load)
+quad compile model.onnx --quantization int8         # INT8 via the active backend
+quad compile model.onnx --backend qairt             # Force the real qairt backend
+quad compile model.onnx --coverage-only             # IR + per-target op-coverage report
 
 # Optimization
-quad optimize model.onnx --target qnpu_v3 --quantization int8
+quad optimize model.onnx --target qnpu_v3 --quantization int8 --power-budget 5000
 
 # Profiling
-quad profile model.qbin --level deep
-quad profile model.qbin --power --budget 5000
+quad profile model.qbin --level deep --device npu
+quad profile model.qbin --level system              # Timeline-only (fastest)
 
 # Benchmarking
-quad benchmark                        # All default models
-quad benchmark --device npu --models mobilenetv2,resnet50
+quad benchmark                                      # All default models
+quad benchmark --device npu --models mobilenetv2 --models resnet50
 
-# Serving
-quad serve --models ./model_repo/ --port 8080
+# Serving (model_path is positional)
+quad serve model.qbin --port 8080 --device npu --name mnet
 
 # Hardware
 quad detect                  # Show available compute units
+quad detect --refresh        # Re-probe; bypass the discovery cache
 ```
 
 ---
@@ -345,30 +366,34 @@ When using Claude Code in this project, 5 MCP tools are available via natural la
 ## Testing
 
 ```bash
-make test                    # All 375 tests with coverage
-make test-unit               # Unit tests only (~3s)
+make test                    # Full suite with coverage
+make test-unit               # Unit tests only (fast)
 pytest tests/integration/    # Integration tests
 pytest tests/e2e/            # End-to-end pipeline
 pytest -k "profiler"         # Run tests matching pattern
 pytest tests/ --cov=quad --cov-report=html  # Coverage report
 ```
 
-**Test breakdown:**
-| Module | Tests | What's Tested |
-|--------|-------|---------------|
-| runtime | 43 | Device, Tensor, Model, Stream, Memory, Power |
-| compiler | 23 | IR, QBin, capabilities, ONNX frontend, pipeline |
-| libs | 36 | Conv2d, Linear, Attention, BLAS ops |
-| optimizer | 27 | Fusion, dead code, memory planning, pipeline |
-| profiler | 46 | Roofline, kernel, power, memory, system |
-| kernels | 46 | DSL, primitives, Graph capture/replay |
-| serve | 48 | Server, registry, deployment |
-| cli | 16 | quickstart, doctor, benchmark |
-| MCP tools | 20 | All 5 tools through mock adapter |
-| E2E | 25 | Full pipeline, TTFI, cross-platform |
-| models | 9 | Pydantic schema validation |
-| adapters | 17 | Mock adapter, factory |
-| codegen | 17 | Templates, validators |
+**Test layout** (`tests/`):
+
+| Module                | What's tested                                          |
+| --------------------- | ------------------------------------------------------ |
+| `unit/test_runtime`   | Device, Tensor, Model, Stream, Memory, Power           |
+| `unit/test_compiler`  | IR, QBin, capabilities, ONNX frontend, pipeline        |
+| `unit/test_libs`      | Conv2d, Linear, Attention, BLAS ops                    |
+| `unit/test_optimizer` | Fusion, dead code, memory planning, pipeline           |
+| `unit/test_profiler`  | Roofline, kernel, power, memory, system                |
+| `unit/test_kernels`   | DSL, primitives, Graph capture/replay                  |
+| `unit/test_serve`     | Server, registry, deployment                           |
+| `unit/test_cli`       | quickstart, doctor, benchmark, mode                    |
+| `unit/test_tools`     | All 5 MCP tools through the mock adapter               |
+| `unit/test_models`    | Pydantic schema validation                             |
+| `unit/test_adapters`  | Mock + QAIRT adapter, factory                          |
+| `unit/test_codegen`   | Templates, validators                                  |
+| `integration/`        | Cross-module flows                                     |
+| `e2e/`                | Full pipeline, TTFI, cross-platform                    |
+
+`pytest --collect-only -q` prints the live count — that's the source of truth.
 
 ---
 
@@ -443,14 +468,36 @@ make format                    # Auto-format
 
 | Issue | Solution |
 |-------|----------|
+| `quad: command not found` | `source ./activate.sh` (or `source .venv/bin/activate`); `pip install -e ".[dev]"` re-registers the `quad` script |
 | `ModuleNotFoundError: quad` | `source .venv/bin/activate && pip install -e .` |
 | `quad.toml not found` | `cp configs/quad.toml.example quad.toml` |
 | Tests fail on import | `pip install -e ".[dev]"` |
-| Server won't start | `python -m quad.server.main` for direct error |
+| Server won't start | `python -m quad.mcp.server` for the direct error |
+| `bash: command not found` on Windows | Run `.\bootstrap.ps1` first (installs Git Bash via winget) |
 | Permission denied | `chmod +x install.sh launch.sh` |
-| Template render error | Run from QUAD root directory |
+| Template render error | Run from the QUAD root directory |
+| Real-mode infer falls back to mock | `quad doctor --real-mode` prints the exact missing piece |
 
 Run `quad doctor` for automated environment diagnostics.
+
+---
+
+## Uninstalling
+
+```bash
+# 1. Drop the bundled Claude Code skills (settings.json is preserved)
+quad-client uninstall
+
+# 2. Remove the Python package
+pip uninstall quad-agent
+
+# 3. (Optional) Wipe the local checkout state
+rm -rf .venv sdks/ .quad/ output/ quad.toml .claude/settings.json
+```
+
+`quad-client uninstall` deliberately keeps `.claude/settings.json` —
+delete it manually only if you're fully detaching Claude Code from this
+project.
 
 ---
 

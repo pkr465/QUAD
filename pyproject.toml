@@ -56,6 +56,10 @@ client = [
 ]
 
 [project.scripts]
+# Unified developer CLI — quad <subcommand> for all toolchain operations
+# (configure / quickstart / doctor / mode / sdk / detect / compile / optimize /
+# profile / serve / benchmark / version). Backed by quad.cli.main:main.
+quad = "quad.cli.main:main"
 quad-server = "quad.server.main:cli"
 # Lightweight client CLI. Does not import the heavy quad.cli.main module
 # so importing quad-client doesn't pull adapters / runtime / compiler.

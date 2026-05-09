@@ -13,7 +13,7 @@
 |---|---|---|
 | Python deps (fastmcp, jinja2, structlog, numpy, pydantic, …) | `pip` | ~150 MB |
 | QUAD core package (`src/quad/`) | site-packages | ~10 MB |
-| Templates (43 Jinja2 files) | bundled in wheel | ~500 KB |
+| Templates (42 Jinja2 files) | bundled in wheel | ~500 KB |
 | QAIRT SDK (optional, multi-GB) | `./sdks/qairt-X.Y.Z/` | ~1 GB unpacked |
 | `quad-server` + `quad` + `quad-client` entry points | global `pip` scripts | < 1 MB |
 | `quad.toml` | project root | ~1 KB |
