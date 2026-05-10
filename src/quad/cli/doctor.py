@@ -85,6 +85,9 @@ def run_doctor(real_mode: bool = False) -> DoctorReport:
     report.checks.append(_check_aimet_integration())
     report.checks.append(_check_aihub_integration())
     report.checks.append(_check_python_arch_vs_os())
+    report.checks.append(_check_psutil_for_profiling())
+    report.checks.append(_check_diagview_for_profiling())
+    report.checks.append(_check_powercfg_for_power_estimation())
 
     if real_mode:
         report.checks.append(_check_adapter_mode_real())
@@ -661,4 +664,69 @@ def _check_python_arch_vs_os() -> CheckResult:
         "pass",
         f"Python ({py_arch}) matches OS arch ({os_arch}); "
         "QAIRT host tools should load the correct .pyd.",
+    )
+
+
+def _check_psutil_for_profiling() -> CheckResult:
+    """Verify psutil is importable — used for RSS sampling + CPU%."""
+    try:
+        import psutil
+    except ImportError:
+        return CheckResult(
+            "psutil (RSS + CPU%)",
+            "warn",
+            "psutil not installed. Memory + CPU utilisation will report "
+            "as not_measured. Install via: pip install -e .[real]",
+        )
+    return CheckResult(
+        "psutil (RSS + CPU%)",
+        "pass",
+        f"psutil {getattr(psutil, '__version__', '?')} ready for RSS sampling + cpu_percent.",
+    )
+
+
+def _check_diagview_for_profiling() -> CheckResult:
+    """snpe-diagview is required to extract structured metrics from the
+    binary diaglog produced by snpe-net-run."""
+    from quad.profiler.diagview import find_diagview
+
+    tool = find_diagview()
+    if not tool:
+        return CheckResult(
+            "snpe-diagview",
+            "warn",
+            "snpe-diagview not on PATH. Per-layer + accurate latency "
+            "metrics will fall back to stdout parsing only. Source the "
+            "QAIRT envsetup or activate.ps1 to add it.",
+        )
+    return CheckResult(
+        "snpe-diagview",
+        "pass",
+        f"snpe-diagview at {tool} (used to convert SNPEDiag_*.bin to CSV).",
+    )
+
+
+def _check_powercfg_for_power_estimation() -> CheckResult:
+    """powercfg.exe is the no-extra-tooling Windows power source."""
+    from quad.profiler.host_power import srumutil_available
+
+    import os
+    if os.name != "nt":
+        return CheckResult(
+            "powercfg / SRUM",
+            "pass",
+            "Non-Windows host — power estimation uses the host_thermal_model.",
+        )
+    if not srumutil_available():
+        return CheckResult(
+            "powercfg / SRUM",
+            "warn",
+            "powercfg.exe not on PATH (unusual on Windows). Power values "
+            "will fall back to the host_thermal_model estimate only.",
+        )
+    return CheckResult(
+        "powercfg / SRUM",
+        "pass",
+        "powercfg.exe ready — SRUM Energy Estimation can supplement the "
+        "host_thermal_model on Windows ARM64.",
     )

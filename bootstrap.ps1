@@ -173,6 +173,90 @@ if ($git) {
     Write-Warn "git not on PATH (expected with Git for Windows)"
 }
 
+# --- Step 2a: Native ARM64 Python on Snapdragon X Elite ----------------------
+#
+# QAIRT's qti.aisw.dlc_utils.__init__.py keys off platform.processor() ("ARMv8…"
+# on this hardware) regardless of Python's own bitness. An x86_64 Python
+# running through Prism emulation will therefore try to load the
+# windows-arm64ec/.pyd — which only loads into native ARM64 Python.
+# Result: every host-side QAIRT tool (qairt-converter, qairt-quantizer, the
+# *-onnx-converter scripts) fails with "ImportError: DLL load failed while
+# importing libDlModelToolsPy". The fix is a native ARM64 Python.
+#
+# We detect emulated Python on ARM64 and offer to install the python.org
+# ARM64 build via winget. Idempotent: skipped when the active Python is
+# already arm64, when -NoInstallBash was passed, or when winget refuses.
+
+Write-Step "Step 2a: Native ARM64 Python check (Snapdragon X Elite)"
+
+function Test-EmulatedPythonOnArm64 {
+    param([string]$PyExe)
+    if (-not $PyExe) { return $false }
+    $arch = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Architecture)
+    if ($arch -ne 12) { return $false }   # not ARM64 host
+    $pyArch = & $PyExe -c "import sysconfig; print(sysconfig.get_platform())" 2>$null
+    if (-not $pyArch) { return $false }
+    return ($pyArch -match "amd64|x86")
+}
+
+function Install-Arm64Python {
+    if (-not $winget) { $winget = Get-Command winget -ErrorAction SilentlyContinue }
+    if (-not $winget) {
+        Write-Warn "winget not available; install ARM64 Python manually:"
+        Write-Warn "  https://www.python.org/downloads/windows/  (look for 'Windows arm64')"
+        return $false
+    }
+    Write-Info "Installing Python 3.12 (arm64) via winget"
+    $wargs = @(
+        "install", "--id", "Python.Python.3.12",
+        "--source", "winget",
+        "--architecture", "arm64",
+        "--silent",
+        "--accept-source-agreements",
+        "--accept-package-agreements"
+    )
+    try {
+        & winget @wargs
+        if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335212) {
+            # 0 = installed; -1978335212 = already installed at requested version
+            Write-Ok "ARM64 Python ready (re-open the shell to pick it up on PATH)."
+            return $true
+        }
+        Write-Warn "winget exit $LASTEXITCODE installing ARM64 Python"
+    } catch {
+        Write-Warn ("winget install failed: " + $_.Exception.Message)
+    }
+    return $false
+}
+
+if ($python -and (Test-EmulatedPythonOnArm64 -PyExe $python.Source)) {
+    Write-Warn "Detected x86_64 Python on ARM64 Windows (Prism emulation)."
+    Write-Warn "QAIRT host tools will fail with libDlModelToolsPy ImportError."
+    if ($NoInstallBash) {
+        Write-Warn "-NoInstallBash passed; skipping ARM64 Python install."
+        Write-Warn "Install manually: winget install Python.Python.3.12 --architecture arm64"
+    } else {
+        $installed = Install-Arm64Python
+        if ($installed) {
+            # Re-resolve PATH so the freshly-installed arm64 python wins.
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+            $newPython = Get-Command python -ErrorAction SilentlyContinue
+            if (-not $newPython) { $newPython = Get-Command python3 -ErrorAction SilentlyContinue }
+            if ($newPython -and -not (Test-EmulatedPythonOnArm64 -PyExe $newPython.Source)) {
+                Write-Ok "Active Python is now native ARM64."
+                $python = $newPython
+            } else {
+                Write-Warn "ARM64 Python installed but PATH resolution still picks the x86 build."
+                Write-Warn "Open a NEW PowerShell window after this script completes, then re-run:"
+                Write-Warn "    .\bootstrap.ps1"
+                Write-Warn "to recreate the venv against ARM64 Python."
+            }
+        }
+    }
+} elseif ($python) {
+    Write-Ok ("Python architecture OK ({0})." -f (& $python.Source -c "import sysconfig; print(sysconfig.get_platform())" 2>$null))
+}
+
 # --- Step 2b: Visual C++ Redistributable -------------------------------------
 #
 # QAIRT's host-side Python tools (qairt-converter, qairt-quantizer, the

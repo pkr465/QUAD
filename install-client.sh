@@ -149,16 +149,25 @@ fi
 
 log_section "Installing client deps"
 log_info "Installing: typer + httpx + quad-agent[client]"
-# Use editable install if we're in a checkout, else regular pip install
+# Use editable install if we're in a checkout, else regular pip install.
+# --upgrade on every run pulls the latest compatible release of typer +
+# httpx so the client doesn't lag behind the server's enriched schema
+# (RSS / utilisation / power fields landed in QUAD post-2026-05-10).
 if [ -f "${SCRIPT_DIR}/pyproject.toml" ]; then
     "$PYTHON" -m pip install --quiet --upgrade pip 2>/dev/null
-    "$PYTHON" -m pip install --quiet -e "${SCRIPT_DIR}[client]" 2>/dev/null
-    log_ok "Installed quad-agent[client] from local checkout (editable)"
+    "$PYTHON" -m pip install --quiet --upgrade -e "${SCRIPT_DIR}[client]" 2>/dev/null
+    log_ok "Installed quad-agent[client] from local checkout (editable, latest)"
 else
     "$PYTHON" -m pip install --quiet --upgrade pip 2>/dev/null
-    "$PYTHON" -m pip install --quiet "quad-agent[client]" 2>/dev/null
-    log_ok "Installed quad-agent[client] from PyPI"
+    "$PYTHON" -m pip install --quiet --upgrade "quad-agent[client]" 2>/dev/null
+    log_ok "Installed quad-agent[client] from PyPI (latest)"
 fi
+# Refresh the two latest-critical client deps explicitly so the client
+# can render the server's enriched profiling fields (httpx 0.27+ for the
+# streaming response API; typer 0.12+ for nested subcommand groups).
+"$PYTHON" -m pip install --quiet --upgrade typer httpx 2>/dev/null && \
+    log_ok "Client deps refreshed to latest" || \
+    log_warn "Could not refresh client deps (offline?)"
 
 # Verify quad-client is importable
 if ! "$PYTHON" -c "from quad.client.cli import cli" >/dev/null 2>&1; then

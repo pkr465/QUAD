@@ -497,12 +497,30 @@ class QAIRTAdapter(SDKAdapter):
     async def _profile_standard(
         self, request: ProfileRequest, level: "ProfilingLevel"
     ) -> ProfilingReport:
-        """Standard profiling (basic/detailed) via snpe-net-run."""
+        """Standard profiling (basic/detailed) via snpe-net-run + snpe-diagview.
+
+        Pipeline:
+            1. ``snpe-net-run --profiling_level <level>`` produces
+               ``output/SNPEDiag_*.bin`` (binary diaglog).
+            2. While snpe-net-run runs, ``rss_sampler`` polls
+               ``psutil.Process(pid).memory_info().rss`` so we get
+               peak / mean working-set without depending on QPM3.
+            3. After snpe-net-run exits, ``snpe-diagview`` converts the
+               diaglog to text/CSV which the parser module turns into
+               structured latency + per-layer stats.
+        """
         from quad.profiler.levels import ProfilingLevel
+        from quad.profiler.rss_sampler import run_with_rss_sampling
+
         tool = _find_tool("snpe-net-run")
         model_path = Path(request.model_path)
 
         input_list = self._create_dummy_input_list(model_path)
+
+        # Direct snpe-net-run output to a per-run dir so diaglog files
+        # aren't smashed across concurrent profile calls.
+        output_dir = model_path.parent / f".quad_profile_{model_path.stem}_{int(time.time())}"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         runtime_flags = {
             "cpu": "--use_cpu",
@@ -520,6 +538,7 @@ class QAIRTAdapter(SDKAdapter):
             "--perf_profile", "high_performance",
             "--profiling_level", level.value,
             "--duration", str(request.duration_s),
+            "--output_dir", str(output_dir),
         ]
 
         if getattr(request, "enable_init_cache", False):
@@ -533,7 +552,9 @@ class QAIRTAdapter(SDKAdapter):
                 shape_str = ",".join(str(d) for d in shape)
                 cmd += ["--input_dimensions", f"{name}:{shape_str}"]
 
-        result = await _run_command(cmd, timeout=float(request.duration_s + 60))
+        result, rss_report = await run_with_rss_sampling(
+            cmd, timeout=float(request.duration_s + 60)
+        )
 
         from quad.adapters.dsp_env import is_windows_signature_error
         if is_windows_signature_error(result.stderr):
@@ -545,32 +566,71 @@ class QAIRTAdapter(SDKAdapter):
                 "Do NOT modify either file — this breaks the digital signature."
             )
 
+        # First try to parse snpe-net-run stdout. Then run snpe-diagview
+        # against any SNPEDiag_*.bin the run produced and merge the (more
+        # accurate) numbers in.
         latency_ms = self._parse_latency(result.stdout)
         layers = self._parse_layers(result.stdout)
+        diagview_used = False
+        try:
+            from quad.profiler.diagview import find_diagview, run_diagview
+            diaglogs = sorted(output_dir.rglob("SNPEDiag_*.bin"))
+            if diaglogs and find_diagview() is not None:
+                diag_text = run_diagview(str(diaglogs[0]), timeout=60.0)
+                # Re-parse via the diagview-aware parsers; if they yield
+                # better numbers than the stdout fallback, use them.
+                from quad.adapters.parsers import parse_snpe_diagview_csv
+                diag_metrics = parse_snpe_diagview_csv(diag_text)
+                if diag_metrics["_parsed"]:
+                    if diag_metrics["mean_latency_ms"] > 0:
+                        latency_ms = diag_metrics["mean_latency_ms"]
+                    diag_layers = self._parse_layers(diag_text)
+                    if diag_layers and not (len(diag_layers) == 1
+                                            and getattr(diag_layers[0], "op_type", "") == "composite"):
+                        layers = diag_layers
+                    diagview_used = True
+        except (FileNotFoundError, RuntimeError, TimeoutError):
+            # Diagview unavailable or failed — fall back to the stdout
+            # parser results we already have. Don't fail the whole call.
+            pass
+
         device = await self.detect_hardware(request.platform)
         runtime_used = request.runtime if request.runtime != "auto" else "npu"
 
         notes: dict[str, str] = {}
-        notes["latency"] = (
-            "measured:snpe-net-run" if latency_ms > 0
-            else "not_measured:parser_no_match"
-        )
-        # Tag the layers source: real diagview CSV or per-layer inline
-        # match → "measured"; the single-row composite fallback (op_type
-        # == "composite") → "synthetic_composite" so callers can warn.
+        if latency_ms > 0:
+            notes["latency"] = "measured:snpe-diagview" if diagview_used else "measured:snpe-net-run"
+        else:
+            notes["latency"] = "not_measured:parser_no_match"
         if not layers:
             notes["layers"] = "not_measured"
         elif len(layers) == 1 and getattr(layers[0], "op_type", "") == "composite":
             notes["layers"] = "synthetic_composite:no_diagview_csv"
         else:
-            notes["layers"] = "measured:snpe-net-run"
-        # power: snpe-net-run does not report power. QPM3 / Snapdragon
-        # Profiler integration is the future home for this; today we
-        # explicitly say it wasn't measured rather than emit a fictional
-        # 2000 mW constant.
-        notes["power"] = "not_measured:requires_qpm3_or_profiler"
-        notes["memory"] = "not_measured:requires_per_proc_rss_capture"
-        notes["utilization"] = "not_measured:requires_profiler_capture"
+            notes["layers"] = "measured:snpe-diagview" if diagview_used else "measured:snpe-net-run"
+
+        # Memory now comes from the RSS sampler we wrapped around snpe-net-run.
+        if rss_report.available and rss_report.peak_mb > 0:
+            notes["memory"] = f"measured:psutil_rss({rss_report.samples}_samples)"
+        else:
+            notes["memory"] = f"not_measured:{rss_report.reason or 'rss_unavailable'}"
+
+        # Host CPU% from psutil.cpu_percent over the run window. NPU/GPU
+        # utilisation comes from the host_utilization helper that uses
+        # linting cycle counts where available.
+        from quad.profiler.host_utilization import (
+            cpu_percent_blocking,
+            npu_utilization_from_cycles,
+        )
+        cpu_pct = cpu_percent_blocking(0.0)  # cumulative since process start
+        utilization: dict[str, float] = {"cpu": cpu_pct}
+        notes["utilization"] = "measured:psutil_cpu_percent"
+
+        # Power: rough host-side estimate from CPU/utilisation product.
+        # See profiler/host_power.py — explicitly an estimate, not QPM3.
+        from quad.profiler.host_power import estimate_host_power_mw
+        power_mw_est = estimate_host_power_mw(cpu_pct=cpu_pct, npu_pct=0.0, gpu_pct=0.0)
+        notes["power"] = "estimated:host_thermal_model" if power_mw_est > 0 else "not_measured"
 
         return ProfilingReport(
             latency=LatencyStats(
@@ -582,10 +642,10 @@ class QAIRTAdapter(SDKAdapter):
                 max_ms=latency_ms * 1.8,
             ),
             throughput_fps=round(1000.0 / latency_ms, 1) if latency_ms > 0 else 0,
-            power_mw=0.0,
-            memory_peak_mb=0.0,
-            memory_avg_mb=0.0,
-            utilization={},
+            power_mw=power_mw_est,
+            memory_peak_mb=round(rss_report.peak_mb, 1),
+            memory_avg_mb=round(rss_report.mean_mb, 1),
+            utilization=utilization,
             layers=layers,
             device=device,
             runtime_used=runtime_used,
@@ -595,11 +655,16 @@ class QAIRTAdapter(SDKAdapter):
         )
 
     async def _profile_linting(self, request: ProfileRequest) -> ProfilingReport:
-        """HTP linting profiling — cycle-based per-op analysis."""
+        """HTP linting profiling — cycle-based per-op analysis.
+
+        Same RSS + power + CPU% plumbing as ``_profile_standard`` so
+        ``measurement_notes`` populates real numbers in linting mode too.
+        """
         from quad.profiler.linting import (
             analyze_bottlenecks,
             parse_linting_output,
         )
+        from quad.profiler.rss_sampler import run_with_rss_sampling
         from quad.models.profiling import LintingLayerProfile
 
         tool = _find_tool("snpe-net-run")
@@ -616,7 +681,9 @@ class QAIRTAdapter(SDKAdapter):
             "--duration", str(request.duration_s),
         ]
 
-        result = await _run_command(cmd, timeout=float(request.duration_s + 60))
+        result, rss_report = await run_with_rss_sampling(
+            cmd, timeout=float(request.duration_s + 60)
+        )
 
         # Parse linting output into structured profile
         linting_profile = parse_linting_output(result.stdout)
@@ -649,12 +716,39 @@ class QAIRTAdapter(SDKAdapter):
         device = await self.detect_hardware(request.platform)
         latency_ms = self._parse_latency(result.stdout)
 
+        from quad.profiler.host_utilization import (
+            cpu_percent_blocking,
+            npu_utilization_from_cycles,
+        )
+        from quad.profiler.host_power import estimate_host_power_mw
+
+        cpu_pct = cpu_percent_blocking(0.0)
+        # Use linting cycle counts to back out an arithmetic NPU util%
+        # for the run window. Wall-time approximation = duration_s × 1e6 µs.
+        wall_us = float(request.duration_s) * 1_000_000.0
+        npu_pct = npu_utilization_from_cycles(
+            total_cycles=linting_profile.total_cycles,
+            wall_time_us=wall_us,
+            hexagon_arch=getattr(device, "npu_arch", "V73") or "V73",
+        )
+        utilization = {"cpu": cpu_pct, "npu": npu_pct}
+        power_mw_est = estimate_host_power_mw(
+            cpu_pct=cpu_pct, npu_pct=npu_pct, gpu_pct=0.0,
+        )
+
         notes = {
             "latency": "measured:snpe-net-run" if latency_ms > 0 else "not_measured",
             "linting_cycles": "measured:snpe-net-run --profiling_level linting",
-            "power": "not_measured:requires_qpm3_or_profiler",
-            "memory": "not_measured:requires_per_proc_rss_capture",
-            "utilization": "not_measured:requires_profiler_capture",
+            "power": "estimated:host_thermal_model" if power_mw_est > 0 else "not_measured",
+            "memory": (
+                f"measured:psutil_rss({rss_report.samples}_samples)"
+                if rss_report.available and rss_report.peak_mb > 0
+                else f"not_measured:{rss_report.reason or 'rss_unavailable'}"
+            ),
+            "utilization": (
+                "measured:psutil_cpu_percent+arithmetic_npu_from_cycles"
+                if npu_pct > 0 else "measured:psutil_cpu_percent"
+            ),
         }
 
         return ProfilingReport(
@@ -667,10 +761,10 @@ class QAIRTAdapter(SDKAdapter):
                 max_ms=latency_ms * 1.8,
             ),
             throughput_fps=round(1000.0 / latency_ms, 1) if latency_ms > 0 else 0,
-            power_mw=0.0,
-            memory_peak_mb=0.0,
-            memory_avg_mb=0.0,
-            utilization={},
+            power_mw=power_mw_est,
+            memory_peak_mb=round(rss_report.peak_mb, 1),
+            memory_avg_mb=round(rss_report.mean_mb, 1),
+            utilization=utilization,
             layers=[],  # Linting doesn't report ms-based layer times
             device=device,
             runtime_used="npu",

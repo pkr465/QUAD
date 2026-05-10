@@ -148,6 +148,22 @@ if [ "$PY_MAJOR" -lt 3 ] || ([ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]); t
 fi
 log_ok "Python $PY_VERSION"
 
+# Snapdragon X Elite (Windows-on-ARM) detection: an x86_64 Python running
+# through Prism emulation will fail QAIRT host-tool imports because
+# qti.aisw.dlc_utils picks the wrong .pyd path. We can only detect this
+# here (install.sh runs through Git Bash on Windows); the actual install
+# of the native ARM64 Python is in bootstrap.ps1 / bootstrap.bat.
+PY_PLATFORM=$($PYTHON -c "import sysconfig; print(sysconfig.get_platform())" 2>/dev/null)
+HOST_MACHINE=$($PYTHON -c "import platform; print(platform.uname().machine)" 2>/dev/null)
+if [[ "$HOST_MACHINE" == "ARM64" || "$HOST_MACHINE" == "AARCH64" ]] \
+        && [[ "$PY_PLATFORM" == *amd64* || "$PY_PLATFORM" == *x86* ]]; then
+    log_warn "x86_64 Python detected on ARM64 Windows (Prism emulation)."
+    log_warn "QAIRT host tools (qairt-converter, qairt-quantizer) will fail with"
+    log_warn "ImportError on libDlModelToolsPy because dlc_utils picks the wrong .pyd."
+    log_warn "Recommended: re-run from PowerShell — bootstrap.ps1 will install"
+    log_warn "Python.Python.3.12 --architecture arm64 via winget, then re-run install.sh."
+fi
+
 # ═══════════════════════════════════════════════════════════════════════════
 # STEP 2: QUAD Platform Package
 # ═══════════════════════════════════════════════════════════════════════════
@@ -183,10 +199,18 @@ pip install -e ".[dev]" --quiet 2>/dev/null
 log_ok "quad-agent + dev dependencies installed"
 
 if [ "$INSTALL_REAL_EXTRAS" = true ]; then
-    log_info "Installing real-hardware Python extras (asyncssh, paramiko, onnx)..."
+    log_info "Installing real-hardware Python extras (asyncssh, paramiko, onnx, psutil)..."
     pip install -e ".[real]" --quiet 2>/dev/null && \
         log_ok "Real-hardware extras installed" || \
         log_warn "Some real-hardware extras failed (check pip output with --verbose)"
+    # Pull the *latest compatible* releases of the profiling-critical
+    # packages (psutil >= 5.9 in pyproject; 6.x adds Windows ARM64 wheels
+    # we want for RSS sampling on Snapdragon X Elite). --upgrade is a
+    # no-op when the venv is already on the newest release.
+    log_info "Refreshing profiling deps to latest compatible (psutil + onnx + httpx)..."
+    pip install --upgrade --quiet psutil onnx httpx 2>/dev/null && \
+        log_ok "Profiling deps refreshed" || \
+        log_warn "Some profiling deps failed to upgrade"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
