@@ -22,15 +22,19 @@ if (-not (Test-Path $SdkRoot)) {
 $env:QAIRT_SDK_ROOT    = $SdkRoot
 $env:QUAD_ADAPTER_MODE = "real"
 
-# Prepend SDK paths. bin-shims must come before x86_64-windows-msvc so the
-# .cmd wrappers win over the extensionless POSIX scripts.
+# Prepend the venv Scripts dir first so `python` and the QUAD shims
+# resolve to the project Python (3.10 x86_64 on Snapdragon X Elite —
+# QAIRT 2.46's host .pyd files are built against python310.dll only),
+# then SDK bin-shims, then per-arch QAIRT bin/lib dirs.
+$venvScripts = Join-Path $QuadRoot ".venv\Scripts"
 $prepend = @(
+    $venvScripts,
     $Shims,
     (Join-Path $SdkRoot "bin\aarch64-windows-msvc"),
     (Join-Path $SdkRoot "bin\x86_64-windows-msvc"),
     (Join-Path $SdkRoot "lib\aarch64-windows-msvc"),
     (Join-Path $SdkRoot "lib\x86_64-windows-msvc")
-)
+) | Where-Object { Test-Path $_ }
 $env:PATH = ($prepend -join ";") + ";$env:PATH"
 
 # Python module path for qti.* / snpe.* host helpers.

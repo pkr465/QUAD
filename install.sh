@@ -148,20 +148,34 @@ if [ "$PY_MAJOR" -lt 3 ] || ([ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]); t
 fi
 log_ok "Python $PY_VERSION"
 
-# Snapdragon X Elite (Windows-on-ARM) detection: an x86_64 Python running
-# through Prism emulation will fail QAIRT host-tool imports because
-# qti.aisw.dlc_utils picks the wrong .pyd path. We can only detect this
-# here (install.sh runs through Git Bash on Windows); the actual install
-# of the native ARM64 Python is in bootstrap.ps1 / bootstrap.bat.
+# Snapdragon X Elite (Windows-on-ARM) detection: QAIRT 2.46's host
+# Python tools (qairt-converter, qairt-quantizer, *-onnx-converter)
+# require *all three* of: (1) Python 3.10 x86_64; (2) the full Visual
+# Studio 2022 runtime (not just the VC++ redist); (3) the dlc_utils
+# path-picker patch that QUAD applies post-extract so emulated x86_64
+# Python doesn't try to load the windows-arm64ec/ .pyd.
+#
+# install.sh runs through Git Bash so we can only DETECT here; the
+# actual fixes (winget install Visual Studio + Python 3.10, sdk_patch
+# application) happen in bootstrap.ps1 which we recommend the user
+# run first on Windows ARM64 hosts.
 PY_PLATFORM=$($PYTHON -c "import sysconfig; print(sysconfig.get_platform())" 2>/dev/null)
+PY_VERSION_FULL=$($PYTHON -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>/dev/null)
 HOST_MACHINE=$($PYTHON -c "import platform; print(platform.uname().machine)" 2>/dev/null)
-if [[ "$HOST_MACHINE" == "ARM64" || "$HOST_MACHINE" == "AARCH64" ]] \
-        && [[ "$PY_PLATFORM" == *amd64* || "$PY_PLATFORM" == *x86* ]]; then
-    log_warn "x86_64 Python detected on ARM64 Windows (Prism emulation)."
-    log_warn "QAIRT host tools (qairt-converter, qairt-quantizer) will fail with"
-    log_warn "ImportError on libDlModelToolsPy because dlc_utils picks the wrong .pyd."
-    log_warn "Recommended: re-run from PowerShell — bootstrap.ps1 will install"
-    log_warn "Python.Python.3.12 --architecture arm64 via winget, then re-run install.sh."
+if [[ "$HOST_MACHINE" == "ARM64" || "$HOST_MACHINE" == "AARCH64" ]]; then
+    if [[ "$PY_PLATFORM" == *amd64* || "$PY_PLATFORM" == *x86* ]]; then
+        log_warn "x86_64 Python detected on ARM64 Windows (Prism emulation)."
+        if [[ "$PY_VERSION_FULL" != "3.10" ]]; then
+            log_warn "QAIRT 2.46 host .pyd files are built for python310.dll specifically;"
+            log_warn "Python $PY_VERSION_FULL will fail to import qti.aisw.dlc_utils.modeltools."
+            log_warn "Recommended: re-run from PowerShell — bootstrap.ps1 will install"
+            log_warn "Python.Python.3.10 --architecture x64 + Visual Studio Build Tools via winget."
+        else
+            log_info "Python 3.10 x86_64 detected — host conversion tools should work."
+            log_info "If you see libDlModelToolsPy ImportError, run from PowerShell:"
+            log_info "    .\\bootstrap.ps1   # installs VS Build Tools + applies dlc_utils patch"
+        fi
+    fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════

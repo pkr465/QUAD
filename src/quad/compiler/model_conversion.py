@@ -150,9 +150,26 @@ class ConversionConfig:
             # Unified converter (qairt-converter)
             args += ["--input_network", self.model_path]
 
+            # Pass through every InputSpec as --source_model_input_shape
+            # NAME DIMS. Required for ONNX models with dynamic input
+            # shapes (batch, height, etc.). The legacy --input_dim flag
+            # is still accepted on 2.46 but deprecated; -s is canonical.
+            for spec in self.input_specs:
+                args += ["--source_model_input_shape", spec.name, spec.dim_string]
+
+            # Output nodes / out_tensor_node — required for TF, optional
+            # for ONNX. We pass through whatever the caller supplied.
+            for node in self.output_nodes:
+                args += ["--out_tensor_node", node]
+
             # Float bitwidth (FP16 conversion)
             if self.float_bitwidth == 16:
                 args += ["--float_bitwidth", "16"]
+            # NOTE: --output_path is intentionally omitted for the
+            # unified converter — qairt-converter writes alongside the
+            # input by default, which is what every existing caller
+            # depends on. Callers that need a custom output path can
+            # supply it via extra_args.
 
         else:
             # Legacy per-framework converter

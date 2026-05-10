@@ -177,6 +177,23 @@ fi
 # vs estimated power / utilisation. For stdio-local installs we can
 # query directly; for stdio-ssh / sse-http transports we just print the
 # download URLs as guidance.
+# Snapdragon X Elite advisory: when the client runs on the SAME box as a
+# locally-installed server, the server's qairt-converter needs Python
+# 3.10 x86_64 + VS 2022 Build Tools + the dlc_utils patch. The client
+# code itself works fine on any Python 3.10+. Surface a one-line note
+# so the user can address it once.
+PY_VER_LOCAL=$("$PYTHON" -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>/dev/null)
+PY_PLAT_LOCAL=$("$PYTHON" -c "import sysconfig; print(sysconfig.get_platform())" 2>/dev/null)
+HOST_MACH_LOCAL=$("$PYTHON" -c "import platform; print(platform.uname().machine)" 2>/dev/null)
+if [ "$TRANSPORT" = "stdio-local" ] \
+        && { [ "$HOST_MACH_LOCAL" = "ARM64" ] || [ "$HOST_MACH_LOCAL" = "AARCH64" ]; } \
+        && { echo "$PY_PLAT_LOCAL" | grep -qi amd64 || echo "$PY_PLAT_LOCAL" | grep -qi x86; } \
+        && [ "$PY_VER_LOCAL" != "3.10" ]; then
+    log_info "Snapdragon X Elite + stdio-local detected. QUAD server's model"
+    log_info "conversion needs Python 3.10 x86_64 + VS 2022 Build Tools. Run from"
+    log_info "PowerShell next:  .\\bootstrap.ps1  (installs both via winget)."
+fi
+
 QPM3_FOUND=$("$PYTHON" -c "from quad.profiler.qpm3 import find_qpm3; print(find_qpm3() or '')" 2>/dev/null || echo "")
 SDPTRACE_FOUND=$("$PYTHON" -c "from quad.profiler.sdptrace import find_sdptrace; print(find_sdptrace() or '')" 2>/dev/null || echo "")
 if [ -n "$QPM3_FOUND" ] || [ -n "$SDPTRACE_FOUND" ]; then

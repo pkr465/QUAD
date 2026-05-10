@@ -318,6 +318,86 @@ $arch = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandPropert
 if ($arch -eq 12) {  # 12 = ARM64
     Install-VCRedist -Arch arm64
 
+    # Snapdragon X Elite + QAIRT 2.46: the host Python tools
+    # (qairt-converter, qairt-quantizer, *-onnx-converter) link against
+    # python310.dll AND require the full Visual Studio 2022 runtime
+    # (just the redist isn't enough — VS Build Tools provides the
+    # complete MSVC + Windows SDK chain). We install Build Tools if
+    # missing; the user is prompted if winget can't find it.
+    $vsw = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    $vsPresent = (Test-Path $vsw) -and ((& $vsw -all -prerelease -format value -property installationPath 2>$null).Length -gt 0)
+    if (-not $vsPresent) {
+        Write-Info "Visual Studio 2022 not detected. Installing Build Tools via winget."
+        Write-Info "  (Large download. Skip with -NoInstallBash if you'll convert models elsewhere.)"
+        if (-not $NoInstallBash) {
+            $vsArgs = @(
+                "install", "--id", "Microsoft.VisualStudio.2022.BuildTools",
+                "--source", "winget",
+                "--silent",
+                "--accept-source-agreements",
+                "--accept-package-agreements",
+                "--override",
+                "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Redist.14.Latest --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --includeRecommended"
+            )
+            try {
+                & winget @vsArgs
+                if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335212) {
+                    Write-Ok "VS 2022 Build Tools installed."
+                } else {
+                    Write-Warn "winget exit $LASTEXITCODE installing VS Build Tools. qairt-converter will fail until VS 2022 is installed manually."
+                }
+            } catch {
+                Write-Warn ("VS Build Tools install failed: " + $_.Exception.Message)
+                Write-Warn "Run manually: winget install Microsoft.VisualStudio.2022.BuildTools"
+            }
+        }
+    } else {
+        Write-Ok "Visual Studio 2022 already installed."
+    }
+
+    # Snapdragon X Elite + QAIRT 2.46 also requires Python 3.10 x86_64
+    # specifically — the host .pyd files are built against python310.dll
+    # (not 3.11 / 3.12 / 3.13). We don't auto-create a 3.10 venv (the
+    # user might already be on 3.10), but we install it if missing so
+    # the user can recreate the venv with PYTHON=python3.10 ./install.sh.
+    $py310Exe = "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe"
+    if (-not (Test-Path $py310Exe)) {
+        Write-Info "Installing Python 3.10 x86_64 (needed for QAIRT 2.46 host tools)."
+        if (-not $NoInstallBash) {
+            try {
+                & winget install --id Python.Python.3.10 --source winget --architecture x64 `
+                    --silent --accept-source-agreements --accept-package-agreements
+                if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq -1978335212) {
+                    Write-Ok "Python 3.10 x86_64 installed at $py310Exe"
+                    Write-Info "Recreate the QUAD venv against it:  py -3.10 -m venv .venv  &  .\.venv\Scripts\Activate.ps1"
+                } else {
+                    Write-Warn "winget exit $LASTEXITCODE installing Python 3.10."
+                }
+            } catch {
+                Write-Warn ("Python 3.10 install failed: " + $_.Exception.Message)
+            }
+        }
+    } else {
+        Write-Ok "Python 3.10 x86_64 already at $py310Exe"
+    }
+
+    # Apply the qti.aisw.dlc_utils path-picker patch to any unpacked
+    # QAIRT SDK so it chooses windows-x86_64 under emulated x86 Python.
+    # Safe to run unconditionally (idempotent).
+    if (Test-Path "$ScriptDir\sdks") {
+        Write-Info "Patching QAIRT dlc_utils path-picker (if needed)..."
+        try {
+            $venvPy = Join-Path $ScriptDir ".venv\Scripts\python.exe"
+            if (Test-Path $venvPy) {
+                Push-Location $ScriptDir
+                & $venvPy -c "from quad.sdk_patch import patch_active_sdk; r = patch_active_sdk(); print(r)"
+                Pop-Location
+            }
+        } catch {
+            Write-Warn ("dlc_utils patch failed: " + $_.Exception.Message)
+        }
+    }
+
     # Snapdragon X Elite advisory: emulated x86_64 Python loads the wrong
     # .pyd from QAIRT's lib/python tree (windows-arm64ec instead of
     # windows-x86_64) because qti.aisw.dlc_utils.__init__.py keys off
