@@ -73,31 +73,42 @@ _RX_GPU_ADRENO = re.compile(r"\b(Adreno[\w\.\- ]*)", re.I)
 def _parse_platform_validator(output: str) -> dict[str, Any]:
     """Parse qnn-platform-validator stdout into a small dict.
 
-    Returns keys ``runtimes`` (list[str]), ``chipset``, ``npu``, ``gpu``.
-    Always returns the dict — missing keys map to None or [].
+    Thin wrapper that delegates to ``parsers.parse_qnn_platform_validator``
+    (the per-backend block parser) and merges in the legacy single-line
+    detection from the older 2.45 format. Always returns the dict —
+    missing keys map to ``None`` or ``[]``.
     """
-    runtimes: list[str] = []
+    from quad.adapters.parsers import parse_qnn_platform_validator
+    parsed = parse_qnn_platform_validator(output)
+
+    runtimes: list[str] = list(parsed.get("runtimes") or [])
+    # Legacy single-line "Backend: dsp is supported" fallback (some 2.45
+    # builds, plus the validator's `--help` debug banner).
     for m in _RX_BACKEND.finditer(output):
         be = m.group("be").lower()
-        # dsp/htp both mean NPU in QUAD's runtime vocabulary
         rt = "npu" if be in ("dsp", "htp") else be
         if rt not in runtimes:
             runtimes.append(rt)
 
-    chipset = None
-    for rx in (_RX_CHIPSET, _RX_SOC):
-        m = rx.search(output)
+    chipset = parsed.get("chipset")
+    if not chipset:
+        for rx in (_RX_CHIPSET, _RX_SOC):
+            m = rx.search(output)
+            if m:
+                chipset = m.group("v").strip().rstrip(",.;")
+                break
+
+    npu = parsed.get("npu_arch")
+    if npu and not npu.lower().startswith("hexagon"):
+        npu = f"Hexagon {npu}"
+    if not npu:
+        m = _RX_NPU_HEXAGON.search(output)
         if m:
-            chipset = m.group("v").strip().rstrip(",.;")
-            break
+            npu = m.group(1).strip()
 
-    npu = None
-    m = _RX_NPU_HEXAGON.search(output)
-    if m:
-        npu = m.group(1).strip()
-
-    gpu = None
-    m = _RX_GPU_ADRENO.search(output)
+    gpu = parsed.get("gpu_model")
+    if not gpu:
+        m = _RX_GPU_ADRENO.search(output)
     if m:
         gpu = m.group(1).strip()
 
@@ -424,8 +435,10 @@ class QAIRTAdapter(SDKAdapter):
         original_size = model_path.stat().st_size / (1024 * 1024)
         output_size = output_dlc.stat().st_size / (1024 * 1024) if output_dlc.exists() else 0
 
-        # Parse warnings from stderr
-        warnings = [line for line in result.stderr.split("\n") if "WARNING" in line.upper()]
+        # Parse converter stdout (and stderr for warnings) for the real
+        # supported-ops fraction and unsupported-op list.
+        from quad.adapters.parsers import parse_qairt_converter_stdout
+        parsed = parse_qairt_converter_stdout(result.stdout + "\n" + result.stderr)
 
         # Surface MODEL_TIPS for known model families
         conversion_notes = _get_model_tips(request.model_path)
@@ -433,13 +446,30 @@ class QAIRTAdapter(SDKAdapter):
         # Surface image format guidance
         image_format_notes = _get_image_format_notes(request)
 
+        # Combine parser warnings with the simple "WARNING" line scrape so
+        # we don't lose anything if the parser misses a phrasing variant.
+        warnings = parsed.get("warnings") or [
+            line for line in result.stderr.split("\n") if "WARNING" in line.upper()
+        ]
+
+        # If the parser found a count, trust it; otherwise default to
+        # "100% supported" only when the converter exited cleanly. A
+        # 0% reading from the parser is suspicious (no count emitted)
+        # and falls back to the conservative assumption.
+        if parsed.get("total_ops"):
+            supported_pct = parsed["supported_ops_pct"]
+            unsupported = parsed["unsupported_ops"]
+        else:
+            supported_pct = 100.0
+            unsupported = []
+
         return ConversionResult(
-            output_path=str(output_dlc),
+            output_path=parsed.get("output_path") or str(output_dlc),
             model_size_mb=round(output_size, 2),
             original_size_mb=round(original_size, 2),
             compression_ratio=round(original_size / output_size, 2) if output_size > 0 else 1.0,
-            supported_ops_pct=100.0,  # qairt-converter handles unsupported ops
-            unsupported_ops=[],
+            supported_ops_pct=supported_pct,
+            unsupported_ops=unsupported,
             quantization_applied=request.quantization,
             conversion_time_s=round(conversion_time, 2),
             target_sdk="qairt",
@@ -525,7 +555,15 @@ class QAIRTAdapter(SDKAdapter):
             "measured:snpe-net-run" if latency_ms > 0
             else "not_measured:parser_no_match"
         )
-        notes["layers"] = "measured:snpe-net-run" if layers else "not_measured"
+        # Tag the layers source: real diagview CSV or per-layer inline
+        # match → "measured"; the single-row composite fallback (op_type
+        # == "composite") → "synthetic_composite" so callers can warn.
+        if not layers:
+            notes["layers"] = "not_measured"
+        elif len(layers) == 1 and getattr(layers[0], "op_type", "") == "composite":
+            notes["layers"] = "synthetic_composite:no_diagview_csv"
+        else:
+            notes["layers"] = "measured:snpe-net-run"
         # power: snpe-net-run does not report power. QPM3 / Snapdragon
         # Profiler integration is the future home for this; today we
         # explicitly say it wasn't measured rather than emit a fictional
@@ -927,32 +965,44 @@ class QAIRTAdapter(SDKAdapter):
         return list_path
 
     def _parse_latency(self, stdout: str) -> float:
-        """Parse latency from snpe-net-run output.
+        """Parse latency (ms) from snpe-net-run combined stdout/stderr.
 
-        Returns 0.0 (a sentinel meaning "unknown") rather than a fictional
-        default if no pattern matches. Callers must check ``> 0`` before
-        deriving throughput etc. The previous 5.0 ms fallback silently
-        masked parser breakage.
+        Delegates to ``parse_snpe_net_run_stdout`` for the underlying
+        regex matrix. Returns 0.0 when nothing matches — callers must
+        check ``> 0`` before deriving throughput.
         """
-        patterns = [
-            r"Total Inference Time:\s*([\d.]+)\s*ms",
-            r"Average inference time:\s*([\d.]+)\s*ms?",
-            r"\bAverage\s+Total\s+Inference\s+Time\s*:\s*([\d.]+)",
-            r"\binference time\s*[:=]\s*([\d.]+)\s*ms",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, stdout, re.IGNORECASE)
-            if match:
-                try:
-                    return float(match.group(1))
-                except ValueError:
-                    continue
-        return 0.0
+        from quad.adapters.parsers import parse_snpe_net_run_stdout
+        return float(parse_snpe_net_run_stdout(stdout)["latency_ms"])
 
     def _parse_layers(self, stdout: str) -> list[LayerProfile]:
-        """Parse per-layer profiling from snpe-net-run output."""
-        layers = []
-        import re
+        """Parse per-layer profiling from snpe-net-run / snpe-diagview output.
+
+        Resolution order:
+          1. snpe-diagview CSV (the authoritative source — produced when
+             the runtime emits a binary .diaglog and we run the viewer).
+          2. Inline single-line "name type ms" pattern from older
+             snpe-net-run builds.
+          3. Fallback: a single composite "model" LayerProfile so
+             downstream allocation code has *something* to work with.
+             Callers should consult ``measurement_notes['layers']`` —
+             ``synthetic_composite`` means this fallback fired.
+        """
+        from quad.adapters.parsers import parse_snpe_diagview_layers
+
+        layers: list[LayerProfile] = []
+        diag_layers = parse_snpe_diagview_layers(stdout)
+        if diag_layers:
+            for layer in diag_layers:
+                layers.append(LayerProfile(
+                    name=layer["name"],
+                    op_type="op",
+                    runtime=layer["runtime"],
+                    latency_ms=layer["avg_us"] / 1000.0,
+                    memory_mb=0.0,
+                ))
+            return layers
+
+        # Legacy inline matcher.
         for line in stdout.split("\n"):
             match = re.match(r"\s*(\w+)\s+\w+\s+([\d.]+)", line)
             if match:
@@ -961,12 +1011,22 @@ class QAIRTAdapter(SDKAdapter):
                     op_type="op",
                     runtime="npu",
                     latency_ms=float(match.group(2)),
-                    memory_mb=1.0,
+                    memory_mb=0.0,
                 ))
-        return layers if layers else [
-            LayerProfile(name="model", op_type="composite", runtime="npu",
-                        latency_ms=5.0, memory_mb=30.0)
-        ]
+        if layers:
+            return layers
+
+        # Synthetic-composite fallback. The pre-parser code returned this
+        # silently; we keep the same shape so the orchestrate path still
+        # has per-layer input, but the caller's measurement_notes will
+        # be tagged so consumers know it's not a real measurement.
+        return [LayerProfile(
+            name="model",
+            op_type="composite",
+            runtime="npu",
+            latency_ms=0.0,
+            memory_mb=0.0,
+        )]
 
 
 def _get_model_tips(model_path: str) -> list[str]:

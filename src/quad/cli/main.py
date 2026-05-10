@@ -395,6 +395,104 @@ sdk_app = typer.Typer(
 app.add_typer(sdk_app)
 
 
+# ── quad models — production ONNX provisioning ───────────────────────────
+
+models_app = typer.Typer(
+    name="models",
+    help="Provision production ONNX models for plans. "
+         "Sources are declared in src/quad/model_registry/registry.yaml.",
+    no_args_is_help=True,
+)
+app.add_typer(models_app)
+
+
+@models_app.command("list")
+def models_list(plan: Optional[str] = typer.Option(None, "--plan", help="Filter by plan id")) -> None:
+    """List every model in the registry, with cache state per entry."""
+    from quad.model_registry import list_for_plan, list_models
+    from quad.model_registry.fetcher import _cached_path  # type: ignore[attr-defined]
+    import os
+
+    entries = list_for_plan(plan) if plan else list_models()
+    if not entries:
+        typer.echo(f"No models found{' for plan ' + plan if plan else ''}.")
+        return
+
+    typer.echo(f"{'name':<26} {'plan':<8} {'src':<8} {'state':<10} {'size_mb':>8}  description")
+    typer.echo("-" * 110)
+    for e in entries:
+        if e.url:
+            src = "url"
+            cached = _cached_path(e)
+            state = "cached" if cached.exists() else "missing"
+        else:
+            src = "env"
+            state = "set" if os.environ.get(e.path_env_var or "") else "unset"
+        typer.echo(f"{e.name:<26} {e.plan:<8} {src:<8} {state:<10} {e.size_mb:>8.1f}  {e.description}")
+
+
+@models_app.command("fetch")
+def models_fetch(
+    name: str = typer.Argument(..., help="Registry entry name (see `quad models list`)"),
+    force: bool = typer.Option(False, "--force", help="Re-download even if cached"),
+) -> None:
+    """Download (or resolve) a registered model and print its absolute path."""
+    from quad.model_registry import fetch_model, ModelFetchError
+
+    def _progress(written: int, total: int) -> None:
+        if total:
+            pct = written / total * 100
+            typer.echo(f"  {written/1_048_576:7.2f} MB / {total/1_048_576:7.2f} MB ({pct:5.1f}%)\r", nl=False)
+        else:
+            typer.echo(f"  {written/1_048_576:7.2f} MB\r", nl=False)
+
+    try:
+        path = fetch_model(name, force=force, progress=_progress)
+    except ModelFetchError as exc:
+        typer.echo(f"\n[error] {exc}", err=True)
+        raise typer.Exit(code=2)
+    except KeyError as exc:
+        typer.echo(f"\n[error] {exc}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"\n{path}")
+
+
+@models_app.command("path")
+def models_path(name: str = typer.Argument(...)) -> None:
+    """Print the local path the registry will use for a model (no download)."""
+    from quad.model_registry import resolve_model_path, ModelFetchError
+
+    try:
+        typer.echo(str(resolve_model_path(name)))
+    except ModelFetchError as exc:
+        typer.echo(f"[error] {exc}", err=True)
+        raise typer.Exit(code=2)
+
+
+@models_app.command("verify")
+def models_verify(name: str = typer.Argument(...)) -> None:
+    """Verify the SHA-256 of a cached entry (no-op for env-var entries)."""
+    from quad.model_registry import resolve_entry
+    from quad.model_registry.fetcher import _cached_path, _sha256  # type: ignore[attr-defined]
+
+    entry = resolve_entry(name)
+    if entry.path_env_var:
+        typer.echo(f"{name}: user-supplied (no SHA verification).")
+        return
+    cached = _cached_path(entry)
+    if not cached.exists():
+        typer.echo(f"{name}: not cached. Run `quad models fetch {name}`.", err=True)
+        raise typer.Exit(code=2)
+    actual = _sha256(cached)
+    if entry.sha256:
+        ok = actual.lower() == entry.sha256.lower()
+        typer.echo(f"{name}: SHA-256 = {actual}  [{ 'OK' if ok else 'MISMATCH' }]")
+        if not ok:
+            raise typer.Exit(code=3)
+    else:
+        typer.echo(f"{name}: SHA-256 = {actual}  (no expected value in registry)")
+
+
 @sdk_app.command("status")
 def sdk_status() -> None:
     """Show the SDK QUAD will use (or report that none is installed)."""

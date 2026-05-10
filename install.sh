@@ -20,7 +20,15 @@
 #   Run from PowerShell:           .\bootstrap.ps1
 #   Or from cmd.exe:               bootstrap.bat
 #   bootstrap.ps1 installs Git for Windows (which bundles Git Bash) via
-#   winget, then re-runs this script with the same arguments.
+#   winget, then re-runs this script with the same arguments. It also
+#   installs the Visual C++ 2015-2022 Redistributable (x86 + x64 + arm64
+#   on ARM64 hosts) so QAIRT host tools (qairt-converter, qairt-quantizer,
+#   *-onnx-converter) can load qti.aisw.dlc_utils.libDlModelToolsPy.
+#
+# On Linux/macOS qairt-converter runs on a glibc-native x86_64 Python, so
+# no equivalent system-package step is needed here. If qairt-converter
+# fails to import on Linux, your distro is missing libstdc++ — install
+# build-essential (Debian) or gcc-c++ (RHEL/Fedora).
 # ═══════════════════════════════════════════════════════════════════════════
 set -euo pipefail
 

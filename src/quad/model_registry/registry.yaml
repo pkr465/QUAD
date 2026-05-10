@@ -1,0 +1,80 @@
+# QUAD Model Registry
+# ========================================================================
+# Production ONNX models for plans 1-4 (and any future plans). Each entry
+# is independently fetchable; the registry is purely a manifest — no code
+# logic lives here.
+#
+# To add a new model for a future plan:
+#   - Append a new entry under `models:`
+#   - Pick a unique name (used as the on-disk folder)
+#   - Set either `url` (auto-downloadable) or `path_env_var` (user-supplied)
+#   - Optionally set `sha256` for verified downloads, `license`, `size_mb`
+#
+# Auto-fetch:    quad models fetch <name>
+# Resolve path:  quad models path <name>
+# List:          quad models list
+
+models:
+
+  # ── Plan 1 — Multi-Model Vision Pipeline ────────────────────────────────
+  - name: mobilenetv2
+    plan: plan1
+    description: "ImageNet image classifier (MobileNetV2-12)"
+    url: https://github.com/onnx/models/raw/main/validated/vision/classification/mobilenet/model/mobilenetv2-12.onnx
+    sha256: c0c3f76d93fa3fd6580652a45618618a220fced18babf65774ed169de0432ad5
+    size_mb: 14
+    license: Apache-2.0
+    notes: "Used as the classification leg of Plan 1; also used by the real-hw smoke."
+
+  - name: tiny_yolov2
+    plan: plan1
+    description: "Compact object detector (Tiny YOLOv2, Pascal VOC classes)"
+    url: https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/tiny-yolov2/model/tinyyolov2-8.onnx
+    size_mb: 61
+    license: MIT
+    notes: "Substitute for YOLOv8n where Ultralytics export is not yet shipped."
+
+  - name: fcn_resnet50
+    plan: plan1
+    description: "Semantic segmentation (FCN-ResNet50, COCO classes)"
+    url: https://github.com/onnx/models/raw/main/validated/vision/object_detection_segmentation/fcn/model/fcn-resnet50-12.onnx
+    size_mb: 138
+    license: BSD-3-Clause
+    notes: "Stand-in for DeepLabV3-MBV2 where the public release is gated."
+
+  # ── Plan 2 — On-Device LLM (Llama 3 8B INT4) ────────────────────────────
+  # 16+ GB FP16 weights are gated by Meta; users supply a local export.
+  - name: llama3_8b_prefill
+    plan: plan2
+    description: "Llama 3 8B prefill graph (W4A16 GPTQ recommended)"
+    path_env_var: LLAMA3_8B_PREFILL_ONNX
+    license: "Meta Llama 3 (gated)"
+    notes: "Set LLAMA3_8B_PREFILL_ONNX to the path of your prefill ONNX export."
+
+  - name: llama3_8b_decode
+    plan: plan2
+    description: "Llama 3 8B decode graph with KV-cache I/O bindings"
+    path_env_var: LLAMA3_8B_DECODE_ONNX
+    license: "Meta Llama 3 (gated)"
+    notes: "Set LLAMA3_8B_DECODE_ONNX to the path of your decode ONNX export."
+
+  # ── Plan 4 — Whisper-tiny streaming ASR ─────────────────────────────────
+  - name: whisper_tiny_encoder
+    plan: plan4
+    description: "Whisper-tiny encoder (ONNX export, INT8 NPU target)"
+    url: https://huggingface.co/Xenova/whisper-tiny/resolve/main/onnx/encoder_model.onnx
+    size_mb: 33
+    license: MIT
+    notes: "Community ONNX port; bit-identical encoder weights to openai/whisper-tiny."
+
+  - name: whisper_tiny_decoder
+    plan: plan4
+    description: "Whisper-tiny decoder + KV-cache (community ONNX export)"
+    url: https://huggingface.co/Xenova/whisper-tiny/resolve/main/onnx/decoder_model_merged.onnx
+    size_mb: 105
+    license: MIT
+    notes: "Community ONNX port; the merged graph is what Plan 4 plans against."
+
+  # ── Plan 3 — no model required ─────────────────────────────────────────
+  # Plan 3 (custom Hexagon kernel) tests run against synthetic numpy
+  # tensors in the kernel DSL; no ONNX is fetched.

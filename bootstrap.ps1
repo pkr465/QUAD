@@ -173,6 +173,96 @@ if ($git) {
     Write-Warn "git not on PATH (expected with Git for Windows)"
 }
 
+# --- Step 2b: Visual C++ Redistributable -------------------------------------
+#
+# QAIRT's host-side Python tools (qairt-converter, qairt-quantizer, the
+# *-onnx-converter scripts) link against MSVC runtime DLLs. On Windows ARM64
+# (Snapdragon X Elite Copilot+ PCs) Python is emulated x86, so the x86
+# redistributable is the one that's almost always missing — its absence shows
+# up as "ImportError: DLL load failed while importing libDlModelToolsPy" out
+# of qti.aisw.dlc_utils. We install all three (x86 / x64 / arm64) idempotently:
+# Microsoft's installer is a no-op when the present version is already newer.
+
+Write-Step "Step 2b: Visual C++ Redistributable (x86 + x64 + arm64)"
+
+function Test-VCRedistInstalled {
+    param([Parameter(Mandatory)][ValidateSet('X86','X64','arm64')][string]$Arch)
+    $key = "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\$Arch"
+    if (-not (Test-Path $key)) {
+        # WOW6432 view (32-bit hive) when running 64-bit PowerShell against the X86 redist
+        $key = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\$Arch"
+        if (-not (Test-Path $key)) { return $null }
+    }
+    try {
+        $v = (Get-ItemProperty -Path $key -Name Version -ErrorAction Stop).Version
+        return $v
+    } catch {
+        return $null
+    }
+}
+
+function Install-VCRedist {
+    param(
+        [Parameter(Mandatory)][ValidateSet('X86','X64','arm64')][string]$Arch,
+        [string]$BaseUrl = "https://aka.ms/vs/17/release"
+    )
+    $existing = Test-VCRedistInstalled -Arch $Arch
+    if ($existing) {
+        Write-Ok ("VC++ {0} redistributable already installed: {1}" -f $Arch, $existing)
+        return
+    }
+    $fileArch = $Arch.ToLower()
+    $url = "$BaseUrl/vc_redist.$fileArch.exe"
+    $tmp = Join-Path $env:TEMP "vc_redist.$fileArch.exe"
+    Write-Info "Downloading VC++ $Arch redistributable from $url"
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+    } catch {
+        Write-Warn ("Download failed for $Arch redistributable: " + $_.Exception.Message)
+        Write-Warn "qairt-converter may fail until you install it manually:"
+        Write-Warn "    https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist"
+        return
+    }
+    Write-Info "Running installer (silent, /quiet /norestart)"
+    $proc = Start-Process -FilePath $tmp -ArgumentList "/install","/quiet","/norestart" -Wait -PassThru
+    Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+    # 0 = success; 1638 = newer version already installed; 3010 = success, reboot required
+    switch ($proc.ExitCode) {
+        0    { Write-Ok  "VC++ $Arch redistributable installed" }
+        1638 { Write-Ok  "VC++ $Arch redistributable: newer version already present" }
+        3010 { Write-Ok  "VC++ $Arch redistributable installed (reboot recommended later)" }
+        default {
+            Write-Warn ("VC++ {0} installer exit code: {1} (continuing)" -f $Arch, $proc.ExitCode)
+        }
+    }
+}
+
+# Always do x86 — that's the one Snapdragon X Elite emulated Python needs.
+# x64 covers the rare case of a x64 native Python on ARM64; arm64 covers
+# native ARM64 Python (still in pre-release for many distros at time of writing).
+Install-VCRedist -Arch X86
+Install-VCRedist -Arch X64
+$arch = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Architecture)
+if ($arch -eq 12) {  # 12 = ARM64
+    Install-VCRedist -Arch arm64
+
+    # Snapdragon X Elite advisory: emulated x86_64 Python loads the wrong
+    # .pyd from QAIRT's lib/python tree (windows-arm64ec instead of
+    # windows-x86_64) because qti.aisw.dlc_utils.__init__.py keys off
+    # platform.processor() which always returns "ARMv8…" on this hardware.
+    # Native ARM64 Python sidesteps the issue entirely. Surface this once
+    # so the user knows what they're walking into before qairt-converter
+    # fails with libDlModelToolsPy ImportError.
+    $pyArch = & python -c "import sysconfig; print(sysconfig.get_platform())" 2>$null
+    if ($pyArch -and ($pyArch -match "amd64|x86")) {
+        Write-Warn "Detected x86_64 Python on ARM64 Windows (Prism emulation)."
+        Write-Warn "QAIRT host tools (qairt-converter etc.) prefer native ARM64 Python."
+        Write-Warn "If qairt-converter fails with 'libDlModelToolsPy ImportError', install a"
+        Write-Warn "native ARM64 Python from python.org/downloads/windows (look for"
+        Write-Warn "'Windows arm64' installer) and re-run bootstrap.ps1."
+    }
+}
+
 # --- Step 3: Hand off to install.sh ------------------------------------------
 
 Write-Step "Step 3: Run install.sh"

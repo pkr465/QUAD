@@ -84,6 +84,7 @@ def run_doctor(real_mode: bool = False) -> DoctorReport:
     # Optional integrations — informational, not strict pre-flight
     report.checks.append(_check_aimet_integration())
     report.checks.append(_check_aihub_integration())
+    report.checks.append(_check_python_arch_vs_os())
 
     if real_mode:
         report.checks.append(_check_adapter_mode_real())
@@ -614,4 +615,50 @@ def _check_aihub_integration() -> CheckResult:
         "warn",
         "qai_hub not installed. Cloud profiling and compilation disabled. "
         "Install via: pip install qai-hub  (or set QUAD_AIHUB_BACKEND=mock for tests).",
+    )
+
+
+def _check_python_arch_vs_os() -> CheckResult:
+    """Catch the Snapdragon X Elite x86_64-Python pitfall.
+
+    On ARM64 Windows (Copilot+ PCs), an x86_64 Python runs through Prism
+    emulation. QAIRT's ``qti.aisw.dlc_utils.__init__`` keys off
+    ``platform.processor()`` — which returns "ARMv8…" on the host CPU
+    regardless of the Python's bitness — and tries to load the
+    ``windows-arm64ec/`` .pyd. That .pyd is ARM64-native and won't load
+    into emulated x86_64 Python; the user sees:
+
+        ImportError: DLL load failed while importing libDlModelToolsPy
+
+    Native ARM64 Python loads ``windows-arm64ec/`` correctly. We surface
+    a clear warning so the user can install python-arm64 from python.org
+    instead of debugging an opaque DLL error.
+    """
+    import platform
+    import sys
+    import sysconfig
+
+    # uname.machine reflects the OS architecture; sysconfig.get_platform()
+    # reflects what Python was built for.
+    os_arch = (platform.uname().machine or "").upper()
+    py_arch = sysconfig.get_platform().lower()
+
+    if os_arch in ("ARM64", "AARCH64") and ("amd64" in py_arch or "x86" in py_arch):
+        return CheckResult(
+            "Python arch vs OS",
+            "warn",
+            "Detected x86_64 Python on ARM64 Windows (Prism emulation). "
+            "QAIRT host tools (qairt-converter, qairt-quantizer, *-onnx-converter) "
+            "may fail with 'libDlModelToolsPy ImportError' because QAIRT's "
+            "qti.aisw.dlc_utils.__init__ picks the wrong .pyd path. "
+            "Install native ARM64 Python from python.org/downloads/windows "
+            "(look for 'Windows arm64' installer) and recreate the venv. "
+            "QUAD's runtime side (snpe-net-run, qnn-platform-validator) is "
+            "unaffected — only the host conversion path needs native Python.",
+        )
+    return CheckResult(
+        "Python arch vs OS",
+        "pass",
+        f"Python ({py_arch}) matches OS arch ({os_arch}); "
+        "QAIRT host tools should load the correct .pyd.",
     )
