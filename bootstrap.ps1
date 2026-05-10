@@ -231,28 +231,16 @@ function Install-Arm64Python {
 
 if ($python -and (Test-EmulatedPythonOnArm64 -PyExe $python.Source)) {
     Write-Warn "Detected x86_64 Python on ARM64 Windows (Prism emulation)."
-    Write-Warn "QAIRT host tools will fail with libDlModelToolsPy ImportError."
-    if ($NoInstallBash) {
-        Write-Warn "-NoInstallBash passed; skipping ARM64 Python install."
-        Write-Warn "Install manually: winget install Python.Python.3.12 --architecture arm64"
-    } else {
-        $installed = Install-Arm64Python
-        if ($installed) {
-            # Re-resolve PATH so the freshly-installed arm64 python wins.
-            $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
-            $newPython = Get-Command python -ErrorAction SilentlyContinue
-            if (-not $newPython) { $newPython = Get-Command python3 -ErrorAction SilentlyContinue }
-            if ($newPython -and -not (Test-EmulatedPythonOnArm64 -PyExe $newPython.Source)) {
-                Write-Ok "Active Python is now native ARM64."
-                $python = $newPython
-            } else {
-                Write-Warn "ARM64 Python installed but PATH resolution still picks the x86 build."
-                Write-Warn "Open a NEW PowerShell window after this script completes, then re-run:"
-                Write-Warn "    .\bootstrap.ps1"
-                Write-Warn "to recreate the venv against ARM64 Python."
-            }
-        }
-    }
+    Write-Warn "QAIRT host tools (qairt-converter, qairt-quantizer) require the"
+    Write-Warn "Visual Studio 2022 runtime in addition to the VC++ redist."
+    Write-Warn "Two workarounds:"
+    Write-Warn "  (1) winget install Microsoft.VisualStudio.2022.Community"
+    Write-Warn "      (or BuildTools); QAIRT host tools start working after."
+    Write-Warn "  (2) Run model conversion on a separate x86_64 Linux / Windows"
+    Write-Warn "      host with VS 2022 and copy .dlc / .bin back to this box."
+    Write-Warn ""
+    Write-Warn "QUAD's RUNTIME path (snpe-net-run, profiling, generate_code) works"
+    Write-Warn "fine on this box already - only model conversion is affected."
 } elseif ($python) {
     Write-Ok ("Python architecture OK ({0})." -f (& $python.Source -c "import sysconfig; print(sysconfig.get_platform())" 2>$null))
 }

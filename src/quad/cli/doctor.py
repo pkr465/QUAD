@@ -653,13 +653,19 @@ def _check_python_arch_vs_os() -> CheckResult:
             "Python arch vs OS",
             "warn",
             "Detected x86_64 Python on ARM64 Windows (Prism emulation). "
-            "QAIRT host tools (qairt-converter, qairt-quantizer, *-onnx-converter) "
-            "may fail with 'libDlModelToolsPy ImportError' because QAIRT's "
-            "qti.aisw.dlc_utils.__init__ picks the wrong .pyd path. "
-            "Install native ARM64 Python from python.org/downloads/windows "
-            "(look for 'Windows arm64' installer) and recreate the venv. "
-            "QUAD's runtime side (snpe-net-run, qnn-platform-validator) is "
-            "unaffected — only the host conversion path needs native Python.",
+            "QAIRT host tools (qairt-converter, qairt-quantizer) may fail "
+            "with 'libDlModelToolsPy ImportError'. Empirically on Snapdragon "
+            "X Elite + QAIRT 2.46, the full fix requires the Visual Studio "
+            "2022 (Community / Build Tools) runtime — *not* just the VC++ "
+            "redist, and *not* native ARM64 Python alone (QAIRT 2.46 ships "
+            "ARM64EC .pyd which native ARM64 Python cannot load — WinError "
+            "193). Two pragmatic workarounds: (1) install VS 2022 Community "
+            "(`winget install Microsoft.VisualStudio.2022.Community`) and "
+            "re-run qairt-converter; or (2) run model conversion on a "
+            "separate x86_64 Linux/Windows host with VS 2022, copy the "
+            ".dlc/.bin back. QUAD's runtime path (snpe-net-run, profiling) "
+            "works fine on this box without either fix — only model "
+            "conversion is blocked.",
         )
     return CheckResult(
         "Python arch vs OS",

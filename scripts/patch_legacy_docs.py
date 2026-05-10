@@ -153,6 +153,7 @@ IOT_SAMPLE_PROMPTS = [
 
 
 IOT_APPENDIX_HEADING = "Appendix — IoT Device Support"
+MEASUREMENT_APPENDIX_HEADING = "Appendix — Real-mode Measurement Fidelity"
 
 
 def append_iot_appendix(path: Path, *, prompts: bool = False) -> None:
@@ -207,6 +208,116 @@ def _add_bullet(d, text: str) -> None:
     except KeyError:
         p = d.add_paragraph()
         p.add_run("•  " + text)
+
+
+MEASUREMENT_INTRO = (
+    "QUAD's profile_workload tool now returns a measurement_notes block "
+    "that tags every metric with its provenance: measured (from snpe-"
+    "diagview / QPM3 / psutil), estimated (host thermal model), or "
+    "not_measured (with a reason). No fictional defaults — what you see "
+    "is what was actually captured."
+)
+
+MEASUREMENT_PROVENANCE_TABLE = [
+    ["Metric",        "Measured source",                          "Fallback when tool absent"],
+    ["Latency",       "snpe-diagview CSV (Total Inference Time)", "snpe-net-run stdout parser"],
+    ["Per-layer",     "snpe-diagview CSV (Model Layer Times)",    "synthetic composite (1 row, tagged)"],
+    ["Memory RSS",    "psutil sampler (100 ms polling)",          "not_measured:rss_unavailable"],
+    ["Power",         "QPM3 (per-frame PMIC readings)",           "host_thermal_model (CPU/NPU% × TDP)"],
+    ["NPU util",      "Arithmetic: cycles / wall_time / clock",   "0.0 (tagged not_measured)"],
+    ["GPU util",      "Snapdragon Profiler chrometrace events",   "0.0 (tagged not_measured)"],
+    ["CPU util",      "psutil.cpu_percent",                       "Always available"],
+]
+
+MEASUREMENT_PROFILER_TABLE = [
+    ["Tool", "Activates when present",                       "Provides"],
+    ["QPM3 (Qualcomm Power Monitor 3)",
+     "PATH or QPM3_HOME env var",
+     "Measured per-frame power; flips power tag from estimated to measured"],
+    ["Snapdragon Profiler (sdptrace)",
+     "PATH or SNAPDRAGON_PROFILER_HOME env var",
+     "Real GPU% from chrometrace; populates utilization['gpu']"],
+    ["psutil (always present in [real])",
+     "automatic",
+     "RSS sampling + CPU% percent"],
+    ["snpe-diagview (in QAIRT)",
+     "automatic",
+     "Authoritative latency + per-layer; raises tag from snpe-net-run stdout"],
+]
+
+MEASUREMENT_REGISTRY_TABLE = [
+    ["Command",                       "What it does"],
+    ["quad models list",              "Show every registry entry with cache state"],
+    ["quad models fetch <name>",      "Download + verify SHA-256 (URL entries)"],
+    ["quad models path <name>",       "Resolve to local path (env-var entries)"],
+    ["quad models verify <name>",     "Re-check SHA-256 of a cached file"],
+]
+
+
+def append_measurement_appendix(path: Path) -> None:
+    """Append the 'Real-mode Measurement Fidelity' appendix in-place.
+
+    Idempotent — skips when the appendix heading is already present.
+    """
+    d = Document(str(path))
+    for par in d.paragraphs:
+        if par.text.strip() == MEASUREMENT_APPENDIX_HEADING:
+            print(f"  (skip) {path.name} already has measurement appendix")
+            return
+
+    d.add_page_break()
+    d.add_heading(MEASUREMENT_APPENDIX_HEADING, level=1)
+    d.add_paragraph(
+        "Added 2026-05-10. Records the real-mode measurement plumbing "
+        "that landed across the recent QUAD changes (QAIRT-adapter stdout "
+        "parsers, RSS sampler, host power model, QPM3 / Snapdragon "
+        "Profiler integration, model registry)."
+    )
+
+    d.add_heading("Provenance-tagged metrics", level=2)
+    d.add_paragraph(MEASUREMENT_INTRO)
+    _add_table(d, MEASUREMENT_PROVENANCE_TABLE, header=True)
+
+    d.add_heading("Auto-detected precision profilers", level=2)
+    _add_table(d, MEASUREMENT_PROFILER_TABLE, header=True)
+
+    d.add_heading("Model registry — `quad models`", level=2)
+    d.add_paragraph(
+        "Production ONNX provisioning lives in src/quad/model_registry/. "
+        "Entries declare either a url (auto-downloadable, SHA-256 "
+        "verified) or a path_env_var (user-supplied for gated weights "
+        "like Llama 3 8B). Adding a model for a future plan is a single "
+        "YAML edit — no Python changes needed."
+    )
+    _add_table(d, MEASUREMENT_REGISTRY_TABLE, header=True)
+
+    d.add_heading("Snapdragon X Elite environment caveat", level=2)
+    d.add_paragraph(
+        "QAIRT 2.46's host Python tools (qairt-converter, qairt-quantizer) "
+        "ship as windows-arm64ec/.pyd modules that need the full Visual "
+        "Studio 2022 runtime — not just the VC++ redist, and not native "
+        "ARM64 Python alone (ARM64EC .pyd can't load into pure ARM64 "
+        "Python; WinError 193). On Snapdragon X Elite, either install "
+        "VS 2022 Community (winget install "
+        "Microsoft.VisualStudio.2022.Community) or run model conversion "
+        "on a separate x86_64 host and copy the .dlc back. QUAD's "
+        "runtime path (snpe-net-run, profiling) works on a stock install "
+        "— only model conversion is affected."
+    )
+
+    d.add_heading("Reference", level=2)
+    for r in [
+        "src/quad/adapters/parsers.py — pure-function parsers for snpe-net-run, snpe-diagview, qnn-platform-validator, qairt-converter",
+        "src/quad/profiler/qpm3.py — Qualcomm Power Monitor 3 wrapper",
+        "src/quad/profiler/sdptrace.py — Snapdragon Profiler trace wrapper",
+        "src/quad/profiler/rss_sampler.py — psutil-based async RSS sampler",
+        "src/quad/profiler/host_power.py — host-side power estimate + SRUM Energy Estimation reader",
+        "src/quad/profiler/host_utilization.py — CPU% + NPU/GPU utilisation helpers",
+        "src/quad/model_registry/ — production ONNX manifest + fetcher + CLI",
+    ]:
+        _add_bullet(d, r)
+
+    d.save(str(path))
 
 
 def _add_table(d, rows: list[list[str]], *, header: bool) -> None:
@@ -391,6 +502,8 @@ def main() -> None:
         print(f"Replaced {n} run(s) in {path.name}")
         append_iot_appendix(path, prompts=prompts)
         print(f"Appended IoT appendix to {path.name}")
+        append_measurement_appendix(path)
+        print(f"Appended Measurement-Fidelity appendix to {path.name}")
 
     pptx_path = Path(r"C:\work\05\QUAD\docs\QUAD_Executive_Pitch.pptx")
     patch_pptx(pptx_path)

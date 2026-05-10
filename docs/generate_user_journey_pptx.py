@@ -115,9 +115,10 @@ def create_presentation():
         bullets=[
             "Natural language in Claude Code:",
             '  "Convert my model to INT8 and deploy to the phone"',
-            '  "Profile power consumption on NPU vs GPU"',
-            '  "Generate an Android AAR for this model"',
+            '  "Profile power on NPU vs GPU \u2014 use QPM3 when available"',
+            '  "List models, fetch the latest mobilenetv2 from the registry"',
             "5 MCP tools auto-registered \u2014 zero config in Claude Code",
+            "Every returned metric carries a provenance tag (measured/estimated/not_measured)",
         ],
         slide_num=7,
     )

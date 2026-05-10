@@ -454,7 +454,7 @@ for r_idx, row_data in enumerate(modules):
 
 add_formatted_paragraph(doc, "", space_after=18)
 add_formatted_paragraph(doc,
-    "All seven platform phases (A\u2013G) complete in mock mode. Real SDK adapter ready \u2014 blocked only on SDK CLI documentation access.",
+    "All seven platform phases (A\u2013G) complete in mock mode. Real SDK adapter wired end-to-end \u2014 snpe-net-run + snpe-diagview parsers, RSS sampling, host-power model, and optional QPM3 + Snapdragon Profiler integration auto-detect and flip measurement_notes from estimated to measured the moment the tools land.",
     font_size=11, italic=True, color=MEDIUM_GRAY,
     alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=12)
 
@@ -703,6 +703,60 @@ add_formatted_paragraph(doc,
     "Same Python adapter, same MCP tools, same natural-language UX \u2014 extended from "
     "AI PC / Mobile to the full Qualcomm IoT SoC line.",
     font_size=11, italic=True, color=QUALCOMM_BLUE,
+    alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=12)
+
+add_page_break(doc)
+
+# ============================================================
+# PAGE 8c: Measurement fidelity \u2014 provenance-tagged metrics
+# ============================================================
+
+add_section_title(doc, "8b. Measurement Fidelity")
+
+add_formatted_paragraph(doc,
+    "Every metric QUAD returns is provenance-tagged. You always know "
+    "whether the number is measured (from real hardware via QPM3 / "
+    "snpe-diagview / psutil) or estimated (from a host thermal model). "
+    "No fictional defaults \u2014 the previous 2000 mW placeholder is gone.",
+    font_size=11, color=DARK_GRAY, space_after=12)
+
+mf_data = [
+    ["Metric", "Measured source", "Fallback"],
+    ["Latency",       "snpe-diagview CSV (Total Inference Time)", "snpe-net-run stdout parsers"],
+    ["Per-layer",     "snpe-diagview CSV (Model Layer Times)",    "synthetic composite (1 row, tagged)"],
+    ["Memory RSS",    "psutil sampler (100 ms polling)",          "not_measured (tagged honestly)"],
+    ["Power",         "QPM3 (per-frame PMIC readings)",           "host_thermal_model (CPU/NPU% \u00d7 TDP)"],
+    ["NPU utilization","Arithmetic: cycles / wall_time / clock",  "0.0 (tagged not_measured)"],
+    ["GPU utilization","Snapdragon Profiler chrometrace",         "0.0 (tagged not_measured)"],
+    ["CPU utilization","psutil.cpu_percent",                       "Always available"],
+]
+
+mf_table = doc.add_table(rows=len(mf_data), cols=3)
+mf_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+set_table_light_borders(mf_table)
+for i, h in enumerate(mf_data[0]):
+    style_table_cell(mf_table.rows[0].cells[i], h, bold=True, color=WHITE,
+                     font_size=10, alignment=WD_ALIGN_PARAGRAPH.CENTER,
+                     bg_color=TABLE_HEADER_BG)
+for r_idx in range(1, len(mf_data)):
+    bg = TABLE_ALT_ROW_BG if r_idx % 2 == 1 else None
+    style_table_cell(mf_table.rows[r_idx].cells[0], mf_data[r_idx][0],
+                     bold=True, color=DARK_GRAY, bg_color=bg)
+    style_table_cell(mf_table.rows[r_idx].cells[1], mf_data[r_idx][1],
+                     color=QUALCOMM_BLUE, bg_color=bg)
+    style_table_cell(mf_table.rows[r_idx].cells[2], mf_data[r_idx][2],
+                     color=MEDIUM_GRAY, bg_color=bg)
+
+for cell in mf_table.columns[0].cells: cell.width = Cm(3.5)
+for cell in mf_table.columns[1].cells: cell.width = Cm(6.5)
+for cell in mf_table.columns[2].cells: cell.width = Cm(6)
+
+add_formatted_paragraph(doc, "", space_after=18)
+add_formatted_paragraph(doc,
+    "QPM3 and Snapdragon Profiler are gated downloads from qualcomm.com. "
+    "QUAD auto-detects both on PATH or via QPM3_HOME / SNAPDRAGON_PROFILER_HOME; "
+    "absent them the host-model + psutil path keeps the metric flow honest.",
+    font_size=11, italic=True, color=MEDIUM_GRAY,
     alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=12)
 
 add_page_break(doc)

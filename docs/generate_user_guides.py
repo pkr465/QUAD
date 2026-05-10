@@ -792,6 +792,84 @@ python -c "from quad.compiler.qairt_backend import clear_cache; print(clear_cach
                  "and source URL. Filter by Category to scope a specific sub-stack.",
                  "tip")
 
+    # ─── 20. Real-mode measurement plumbing ──────────────────────────────
+    h1(doc, "20. Real-mode measurement plumbing")
+    p(doc, "QUAD's profile_workload tool now returns a measurement_notes "
+           "block that tags every metric with its provenance. The adapter "
+           "auto-detects optional precision profilers (QPM3, Snapdragon "
+           "Profiler) at runtime and silently uses measured values when "
+           "they're installed; absent them, fields fall back to clearly "
+           "labelled host-side estimates.")
+
+    h2(doc, "20.1  measurement_notes — provenance tags")
+    table(doc, ["Field", "Source tag", "Meaning"], [
+        ["latency",     "measured:snpe-diagview",            "Parsed from snpe-diagview CSV (highest fidelity)"],
+        ["latency",     "measured:snpe-net-run",             "Parsed from snpe-net-run stdout"],
+        ["latency",     "not_measured:parser_no_match",      "Stdout / CSV didn't match any pattern (e.g. .onnx passed instead of .dlc)"],
+        ["layers",      "measured:snpe-diagview",            "Per-layer rows from diagview CSV"],
+        ["layers",      "synthetic_composite:no_diagview_csv","Fallback single-layer placeholder; diagview wasn't invoked"],
+        ["memory",      "measured:psutil_rss(N_samples)",    "psutil polled the snpe-net-run subprocess every 100 ms"],
+        ["power",       "measured:qpm3(N_samples)",          "QPM3 capture; per-frame PMIC readings"],
+        ["power",       "estimated:host_thermal_model",      "Coarse model from CPU/GPU/NPU% × X-Elite TDP profile"],
+        ["utilization", "measured:psutil_cpu+sdptrace_gpu",  "psutil for CPU, sdptrace chrometrace for GPU"],
+        ["utilization", "measured:psutil_cpu_percent",       "CPU only (sdptrace absent)"],
+        ["qhas_chrometrace", "measured:qnn-profile-viewer",  "QHAS chrometrace JSON path"],
+    ])
+
+    h2(doc, "20.2  Optional precision profilers")
+    p(doc, "Two host-side tools, both gated downloads from Qualcomm:")
+    table(doc, ["Tool", "Adds", "Detection / Activation"], [
+        ["QPM3 (Qualcomm Power Monitor 3)",
+         "Measured per-frame power (vs estimated)",
+         "PATH or QPM3_HOME env var. Adapter auto-invokes during snpe-net-run."],
+        ["Snapdragon Profiler (sdptrace)",
+         "Real GPU% utilisation from chrometrace",
+         "PATH or SNAPDRAGON_PROFILER_HOME. Adapter auto-captures concurrent trace."],
+    ])
+    callout(doc, "Neither tool blocks anything. Install once; quad doctor "
+                 "flips them from WARN to PASS; profile_workload responses "
+                 "automatically include the measured values. No client-side "
+                 "changes needed.", "tip")
+
+    h2(doc, "20.3  QAIRT-adapter stdout parsers")
+    p(doc, "src/quad/adapters/parsers.py contains four pure-function parsers "
+           "wired into the adapter:")
+    bullets(doc, [
+        "parse_snpe_net_run_stdout — total/forward inference time, runtime banner, error tags",
+        "parse_snpe_diagview_csv — Total Inference Time, Forward Propagate, per-section init metrics",
+        "parse_snpe_diagview_layers — per-layer rows from the 'Model Layer Times' section",
+        "parse_qnn_platform_validator — per-backend block parser (DSP / GPU / CPU support state)",
+        "parse_qairt_converter_stdout — supported_ops_pct, unsupported_ops list, warnings, errors",
+    ])
+
+    h2(doc, "20.4  Model registry — `quad models`")
+    p(doc, "Production ONNX provisioning lives in src/quad/model_registry/. "
+           "Models are listed in registry.yaml with a name, plan, and either a "
+           "url (auto-downloadable) or a path_env_var (user-supplied for "
+           "gated / large weights).")
+    code(doc, """
+quad models list                  # show every entry with cache state
+quad models fetch mobilenetv2     # download + verify SHA-256
+quad models path llama3_8b_prefill # resolve $LLAMA3_8B_PREFILL_ONNX
+quad models verify <name>         # re-check SHA-256 of cached file
+""")
+    p(doc, "Adding a model for a new plan is a single yaml entry — no Python "
+           "changes. The fetcher streams via httpx, atomic-renames into the "
+           "cache (~/.quad/models/), and verifies SHA-256 when declared.")
+
+    h2(doc, "20.5  Snapdragon X Elite environment caveat")
+    p(doc, "On Snapdragon X Elite (Windows-on-ARM64), QAIRT 2.46's host "
+           "Python tools (qairt-converter, qairt-quantizer) ship as "
+           "windows-arm64ec/.pyd modules that depend on the full Visual "
+           "Studio 2022 runtime, not just the VC++ redistributable. The "
+           "RUNTIME path (snpe-net-run, qnn-platform-validator) works on a "
+           "stock install — only model conversion is affected. To enable "
+           "conversion on this box: `winget install "
+           "Microsoft.VisualStudio.2022.Community` (or use BuildTools), or "
+           "convert on a separate x86_64 host and copy the .dlc back. "
+           "`quad doctor --real-mode` surfaces this explicitly under 'Python "
+           "arch vs OS'.")
+
     # ─── End ──────────────────────────────────────────────────────────────
     doc.add_page_break()
     h1(doc, "Reference Documents")
@@ -801,6 +879,9 @@ python -c "from quad.compiler.qairt_backend import clear_cache; print(clear_cach
         "docs/REAL_HARDWARE_CI.md — self-hosted runner setup",
         "docs/SAMPLE_APP_REPORT.md — Snapdragon X Elite measurements",
         "docs/IOT_DEPENDENCIES.xlsx — IoT device support catalogue (111 components)",
+        "src/quad/adapters/parsers.py — QAIRT/SNPE stdout parsers (snpe-net-run, snpe-diagview, qnn-platform-validator, qairt-converter)",
+        "src/quad/profiler/{qpm3,sdptrace,host_power,host_utilization,rss_sampler}.py — optional precision profilers + host-side measurement helpers",
+        "src/quad/model_registry/ — production ONNX provisioning (registry.yaml + fetcher.py)",
         "tests/e2e/test_real_sdk_e2e.py — the canonical 7-phase e2e validation",
         "QUAD_Client_Guide.docx (companion) — the developer-facing client guide",
     ])
@@ -1164,6 +1245,29 @@ pip uninstall quad-mcp-client
            "on the next reload. The server will fall back to mock if the SDK "
            "isn't reachable, with a tagged warning. Check `quad doctor "
            "--real-mode` on the server side to see why.")
+
+    h3(doc, "What's in measurement_notes when I call profile_workload?")
+    p(doc, "Every metric is tagged with its provenance so you can tell at a "
+           "glance whether QUAD measured it or estimated it. Tags include "
+           "measured:snpe-diagview, measured:psutil_rss(N_samples), "
+           "measured:qpm3(N_samples), estimated:host_thermal_model, "
+           "and not_measured:parser_no_match. On a server without QPM3 / "
+           "Snapdragon Profiler installed, power reads "
+           "estimated:host_thermal_model and utilisation is psutil-only "
+           "(no GPU%). Installing those tools server-side flips the tags "
+           "to measured without any client change.")
+
+    h3(doc, "How do I provision real ONNX models?")
+    p(doc, "Use the server's `quad models` registry. From the IDE side you "
+           "can ask Claude:")
+    code(doc, """
+> Use QUAD to list every model in the registry and tell me which are cached
+> Use QUAD to fetch mobilenetv2 from the registry, then run hardware_detect
+> on Snapdragon X Elite and profile_workload on the cached model
+""")
+    p(doc, "For gated weights (Llama 3 8B), set the matching env var on the "
+           "server side (LLAMA3_8B_PREFILL_ONNX, LLAMA3_8B_DECODE_ONNX) and "
+           "the registry entry will resolve to that local path.")
 
     h3(doc, "Does QUAD-Client work with Qualcomm IoT boards (RB3 Gen 2 / RB5)?")
     p(doc, "Yes — QUAD-Client is transport-agnostic. Point it at a server running "
