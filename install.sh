@@ -486,6 +486,43 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
+# STEP 5b: Optional precision profilers (QPM3, Snapdragon Profiler)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# These two tools are *optional* but unlock measured (vs estimated) power
+# and full system-trace GPU/NPU utilisation in QUAD's profile path. The
+# QAIRT adapter auto-detects them at runtime — when present, measurement
+# notes flip from `estimated:host_thermal_model` to `measured:qpm3(...)`
+# and from `measured:psutil_cpu_percent` to
+# `measured:psutil_cpu+sdptrace_gpu`. Absent they cost nothing.
+#
+# We don't auto-install (gated downloads + EULA). We just detect, report,
+# and surface the URLs. The MOCK_ONLY path skips this section entirely.
+
+if [ "$MOCK_ONLY" = false ]; then
+    log_section "Step 5b: Optional precision profilers"
+
+    QPM3_FOUND=$($PYTHON -c "from quad.profiler.qpm3 import find_qpm3; print(find_qpm3() or '')" 2>/dev/null)
+    if [ -n "$QPM3_FOUND" ]; then
+        log_ok  "QPM3 detected at $QPM3_FOUND — measured power active"
+    else
+        log_info "QPM3 not detected (optional)."
+        log_info "  Download: https://www.qualcomm.com/developer/software/snapdragon-profiler"
+        log_info "  After install, set QPM3_HOME or add the QPM3 bin dir to PATH."
+        log_info "  Re-run quad doctor --real-mode to confirm pickup."
+    fi
+
+    SDPTRACE_FOUND=$($PYTHON -c "from quad.profiler.sdptrace import find_sdptrace; print(find_sdptrace() or '')" 2>/dev/null)
+    if [ -n "$SDPTRACE_FOUND" ]; then
+        log_ok  "Snapdragon Profiler (sdptrace) detected at $SDPTRACE_FOUND"
+    else
+        log_info "Snapdragon Profiler (sdptrace) not detected (optional)."
+        log_info "  Download: https://www.qualcomm.com/developer/software/snapdragon-profiler"
+        log_info "  After install, set SNAPDRAGON_PROFILER_HOME or add Tools/ to PATH."
+    fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
 # STEP 5: Model Framework Packages
 # ═══════════════════════════════════════════════════════════════════════════
 log_section "Step 6: Model Packages"

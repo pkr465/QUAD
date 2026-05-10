@@ -169,6 +169,26 @@ fi
     log_ok "Client deps refreshed to latest" || \
     log_warn "Could not refresh client deps (offline?)"
 
+# ── Optional precision profilers (server-side only — informational here) ──
+#
+# QPM3 + Snapdragon Profiler live on the *server* machine, not the IDE
+# machine. We surface their availability here so the IDE-side developer
+# knows whether the QUAD server they're talking to will report measured
+# vs estimated power / utilisation. For stdio-local installs we can
+# query directly; for stdio-ssh / sse-http transports we just print the
+# download URLs as guidance.
+QPM3_FOUND=$("$PYTHON" -c "from quad.profiler.qpm3 import find_qpm3; print(find_qpm3() or '')" 2>/dev/null || echo "")
+SDPTRACE_FOUND=$("$PYTHON" -c "from quad.profiler.sdptrace import find_sdptrace; print(find_sdptrace() or '')" 2>/dev/null || echo "")
+if [ -n "$QPM3_FOUND" ] || [ -n "$SDPTRACE_FOUND" ]; then
+    log_section "Optional profilers (server-side)"
+    [ -n "$QPM3_FOUND" ]     && log_ok "QPM3 ready on this host: $QPM3_FOUND"
+    [ -n "$SDPTRACE_FOUND" ] && log_ok "sdptrace ready on this host: $SDPTRACE_FOUND"
+elif [ "$TRANSPORT" = "stdio-local" ]; then
+    log_info "Precision profilers (optional, server-side):"
+    log_info "  QPM3 + Snapdragon Profiler enable measured power + GPU% in"
+    log_info "  profile_workload responses. Download: https://www.qualcomm.com/developer/software/snapdragon-profiler"
+fi
+
 # Verify quad-client is importable
 if ! "$PYTHON" -c "from quad.client.cli import cli" >/dev/null 2>&1; then
     log_error "quad.client.cli not importable after install — something's wrong."

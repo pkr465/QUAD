@@ -552,8 +552,31 @@ class QAIRTAdapter(SDKAdapter):
                 shape_str = ",".join(str(d) for d in shape)
                 cmd += ["--input_dimensions", f"{name}:{shape_str}"]
 
-        result, rss_report = await run_with_rss_sampling(
-            cmd, timeout=float(request.duration_s + 60)
+        # Run snpe-net-run, QPM3 power capture, and sdptrace system trace
+        # concurrently — the latter two only fire when the corresponding
+        # tool is installed. Each is fully self-contained and won't raise.
+        from quad.profiler.qpm3 import capture_power, qpm3_available
+        from quad.profiler.sdptrace import capture_trace, sdptrace_available
+
+        async def _qpm3_or_empty():
+            if not qpm3_available():
+                from quad.profiler.qpm3 import PowerTrace
+                return PowerTrace(source="qpm3:not_available")
+            return await capture_power(duration_s=float(request.duration_s))
+
+        async def _sdptrace_or_empty():
+            if not sdptrace_available():
+                from quad.profiler.sdptrace import TraceCapture
+                return TraceCapture(reason="sdptrace:not_available")
+            return await capture_trace(duration_s=float(request.duration_s))
+
+        run_task = asyncio.create_task(
+            run_with_rss_sampling(cmd, timeout=float(request.duration_s + 60))
+        )
+        qpm3_task = asyncio.create_task(_qpm3_or_empty())
+        sdptrace_task = asyncio.create_task(_sdptrace_or_empty())
+        (result, rss_report), qpm3_trace, sdptrace_capture = await asyncio.gather(
+            run_task, qpm3_task, sdptrace_task,
         )
 
         from quad.adapters.dsp_env import is_windows_signature_error
@@ -616,21 +639,33 @@ class QAIRTAdapter(SDKAdapter):
             notes["memory"] = f"not_measured:{rss_report.reason or 'rss_unavailable'}"
 
         # Host CPU% from psutil.cpu_percent over the run window. NPU/GPU
-        # utilisation comes from the host_utilization helper that uses
-        # linting cycle counts where available.
+        # utilisation comes from the host_utilization helper plus, when
+        # an sdptrace chrometrace exists, the GPU events parsed from it.
         from quad.profiler.host_utilization import (
             cpu_percent_blocking,
+            gpu_utilization_from_chrometrace,
             npu_utilization_from_cycles,
         )
-        cpu_pct = cpu_percent_blocking(0.0)  # cumulative since process start
-        utilization: dict[str, float] = {"cpu": cpu_pct}
-        notes["utilization"] = "measured:psutil_cpu_percent"
+        cpu_pct = cpu_percent_blocking(0.0)
+        gpu_pct = 0.0
+        if sdptrace_capture.available and sdptrace_capture.trace_path:
+            gpu_pct = gpu_utilization_from_chrometrace(str(sdptrace_capture.trace_path))
+        utilization: dict[str, float] = {"cpu": cpu_pct, "gpu": gpu_pct}
+        notes["utilization"] = (
+            "measured:psutil_cpu+sdptrace_gpu" if gpu_pct > 0
+            else "measured:psutil_cpu_percent"
+        )
 
-        # Power: rough host-side estimate from CPU/utilisation product.
-        # See profiler/host_power.py — explicitly an estimate, not QPM3.
+        # Power: prefer measured QPM3 reading. Fall back to host_thermal_model
+        # estimate. PowerTrace from a no-op QPM3 has avg_power_mw==0, which
+        # triggers the fallback automatically.
         from quad.profiler.host_power import estimate_host_power_mw
-        power_mw_est = estimate_host_power_mw(cpu_pct=cpu_pct, npu_pct=0.0, gpu_pct=0.0)
-        notes["power"] = "estimated:host_thermal_model" if power_mw_est > 0 else "not_measured"
+        if qpm3_trace.avg_power_mw > 0:
+            power_mw_est = qpm3_trace.avg_power_mw
+            notes["power"] = f"measured:qpm3({len(qpm3_trace.samples)}_samples)"
+        else:
+            power_mw_est = estimate_host_power_mw(cpu_pct=cpu_pct, npu_pct=0.0, gpu_pct=gpu_pct)
+            notes["power"] = "estimated:host_thermal_model" if power_mw_est > 0 else "not_measured"
 
         return ProfilingReport(
             latency=LatencyStats(
@@ -681,8 +716,31 @@ class QAIRTAdapter(SDKAdapter):
             "--duration", str(request.duration_s),
         ]
 
-        result, rss_report = await run_with_rss_sampling(
-            cmd, timeout=float(request.duration_s + 60)
+        # Same concurrent-telemetry pattern as _profile_standard so QPM3
+        # power and sdptrace GPU utilisation flow into the linting report
+        # too when those tools are installed.
+        from quad.profiler.qpm3 import capture_power, qpm3_available
+        from quad.profiler.sdptrace import capture_trace, sdptrace_available
+
+        async def _qpm3_or_empty():
+            if not qpm3_available():
+                from quad.profiler.qpm3 import PowerTrace
+                return PowerTrace(source="qpm3:not_available")
+            return await capture_power(duration_s=float(request.duration_s))
+
+        async def _sdptrace_or_empty():
+            if not sdptrace_available():
+                from quad.profiler.sdptrace import TraceCapture
+                return TraceCapture(reason="sdptrace:not_available")
+            return await capture_trace(duration_s=float(request.duration_s))
+
+        run_task = asyncio.create_task(
+            run_with_rss_sampling(cmd, timeout=float(request.duration_s + 60))
+        )
+        qpm3_task = asyncio.create_task(_qpm3_or_empty())
+        sdptrace_task = asyncio.create_task(_sdptrace_or_empty())
+        (result, rss_report), qpm3_trace, sdptrace_capture = await asyncio.gather(
+            run_task, qpm3_task, sdptrace_task,
         )
 
         # Parse linting output into structured profile
@@ -718,6 +776,7 @@ class QAIRTAdapter(SDKAdapter):
 
         from quad.profiler.host_utilization import (
             cpu_percent_blocking,
+            gpu_utilization_from_chrometrace,
             npu_utilization_from_cycles,
         )
         from quad.profiler.host_power import estimate_host_power_mw
@@ -731,24 +790,36 @@ class QAIRTAdapter(SDKAdapter):
             wall_time_us=wall_us,
             hexagon_arch=getattr(device, "npu_arch", "V73") or "V73",
         )
-        utilization = {"cpu": cpu_pct, "npu": npu_pct}
-        power_mw_est = estimate_host_power_mw(
-            cpu_pct=cpu_pct, npu_pct=npu_pct, gpu_pct=0.0,
-        )
+        gpu_pct = 0.0
+        if sdptrace_capture.available and sdptrace_capture.trace_path:
+            gpu_pct = gpu_utilization_from_chrometrace(str(sdptrace_capture.trace_path))
+        utilization = {"cpu": cpu_pct, "gpu": gpu_pct, "npu": npu_pct}
+
+        if qpm3_trace.avg_power_mw > 0:
+            power_mw_est = qpm3_trace.avg_power_mw
+            power_note = f"measured:qpm3({len(qpm3_trace.samples)}_samples)"
+        else:
+            power_mw_est = estimate_host_power_mw(
+                cpu_pct=cpu_pct, npu_pct=npu_pct, gpu_pct=gpu_pct,
+            )
+            power_note = "estimated:host_thermal_model" if power_mw_est > 0 else "not_measured"
+
+        util_sources = ["psutil_cpu"]
+        if npu_pct > 0:
+            util_sources.append("arithmetic_npu_from_cycles")
+        if gpu_pct > 0:
+            util_sources.append("sdptrace_gpu")
 
         notes = {
             "latency": "measured:snpe-net-run" if latency_ms > 0 else "not_measured",
             "linting_cycles": "measured:snpe-net-run --profiling_level linting",
-            "power": "estimated:host_thermal_model" if power_mw_est > 0 else "not_measured",
+            "power": power_note,
             "memory": (
                 f"measured:psutil_rss({rss_report.samples}_samples)"
                 if rss_report.available and rss_report.peak_mb > 0
                 else f"not_measured:{rss_report.reason or 'rss_unavailable'}"
             ),
-            "utilization": (
-                "measured:psutil_cpu_percent+arithmetic_npu_from_cycles"
-                if npu_pct > 0 else "measured:psutil_cpu_percent"
-            ),
+            "utilization": "measured:" + "+".join(util_sources),
         }
 
         return ProfilingReport(
@@ -832,6 +903,35 @@ class QAIRTAdapter(SDKAdapter):
         device = await self.detect_hardware(request.platform)
         latency_ms = self._parse_latency(result.stdout)
 
+        # Wire F.2: extract real GPU utilisation from the chrometrace JSON
+        # we just emitted; CPU% from psutil; NPU% from cycle arithmetic if
+        # available — none of these need QPM3.
+        from quad.profiler.host_utilization import (
+            cpu_percent_blocking,
+            gpu_utilization_from_chrometrace,
+            npu_utilization_from_cycles,
+        )
+        from quad.profiler.host_power import estimate_host_power_mw
+
+        cpu_pct = cpu_percent_blocking(0.0)
+        gpu_pct = gpu_utilization_from_chrometrace(chrometrace_path) if chrometrace_path else 0.0
+        # QHAS doesn't compute total cycles directly; pull from the
+        # diaglog if QHAS produced one, else stay at 0.
+        wall_us = float(request.duration_s) * 1_000_000.0
+        npu_pct = 0.0  # QHAS chrometrace is the source-of-truth via gpu/cpu stages
+        utilization = {"cpu": cpu_pct, "gpu": gpu_pct, "npu": npu_pct}
+        power_mw = estimate_host_power_mw(cpu_pct=cpu_pct, gpu_pct=gpu_pct, npu_pct=npu_pct)
+        notes = {
+            "latency": "measured:snpe-net-run" if latency_ms > 0 else "not_measured",
+            "memory": "not_measured:qhas_runs_outside_subprocess_sampler",
+            "utilization": (
+                "measured:psutil_cpu+chrometrace_gpu"
+                if gpu_pct > 0 else "measured:psutil_cpu"
+            ),
+            "power": "estimated:host_thermal_model",
+            "qhas_chrometrace": "measured:qnn-profile-viewer" if chrometrace_path else "not_emitted",
+        }
+
         return ProfilingReport(
             latency=LatencyStats(
                 mean_ms=latency_ms,
@@ -842,16 +942,17 @@ class QAIRTAdapter(SDKAdapter):
                 max_ms=latency_ms * 1.8,
             ),
             throughput_fps=round(1000.0 / latency_ms, 1) if latency_ms > 0 else 0,
-            power_mw=2000.0,
-            memory_peak_mb=50.0,
-            memory_avg_mb=40.0,
-            utilization={"cpu": 5.0, "gpu": 0.0, "npu": 95.0},
+            power_mw=power_mw,
+            memory_peak_mb=0.0,
+            memory_avg_mb=0.0,
+            utilization=utilization,
             layers=[],
             device=device,
             runtime_used="npu",
             duration_s=float(request.duration_s),
             profiling_level="qhas",
             qhas_chrometrace_path=chrometrace_path,
+            measurement_notes=notes,
         )
 
     async def get_supported_ops(self) -> list[str]:

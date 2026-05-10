@@ -88,6 +88,8 @@ def run_doctor(real_mode: bool = False) -> DoctorReport:
     report.checks.append(_check_psutil_for_profiling())
     report.checks.append(_check_diagview_for_profiling())
     report.checks.append(_check_powercfg_for_power_estimation())
+    report.checks.append(_check_qpm3_integration())
+    report.checks.append(_check_sdptrace_integration())
 
     if real_mode:
         report.checks.append(_check_adapter_mode_real())
@@ -729,4 +731,42 @@ def _check_powercfg_for_power_estimation() -> CheckResult:
         "pass",
         "powercfg.exe ready — SRUM Energy Estimation can supplement the "
         "host_thermal_model on Windows ARM64.",
+    )
+
+
+def _check_qpm3_integration() -> CheckResult:
+    """Optional: QPM3 (Qualcomm Power Monitor 3) for measured per-frame power."""
+    from quad.profiler.qpm3 import find_qpm3, install_hint
+
+    tool = find_qpm3()
+    if tool:
+        return CheckResult(
+            "QPM3 (measured power)",
+            "pass",
+            f"QPM3 at {tool} — power_mw will report measured QPM3 readings "
+            "instead of the host_thermal_model estimate.",
+        )
+    return CheckResult(
+        "QPM3 (measured power)",
+        "warn",
+        install_hint(),
+    )
+
+
+def _check_sdptrace_integration() -> CheckResult:
+    """Optional: Snapdragon Profiler sdptrace for system-wide GPU/NPU traces."""
+    from quad.profiler.sdptrace import find_sdptrace, install_hint
+
+    tool = find_sdptrace()
+    if tool:
+        return CheckResult(
+            "Snapdragon Profiler (sdptrace)",
+            "pass",
+            f"sdptrace at {tool} — utilisation will include real GPU% from "
+            "chrometrace events captured concurrent with snpe-net-run.",
+        )
+    return CheckResult(
+        "Snapdragon Profiler (sdptrace)",
+        "warn",
+        install_hint(),
     )
